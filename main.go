@@ -75,6 +75,18 @@ type claudeProc struct {
 	stdin io.WriteCloser
 }
 
+type historyKind int
+
+const (
+	histPrerendered historyKind = iota
+	histResponse
+)
+
+type historyEntry struct {
+	kind historyKind
+	text string
+}
+
 type sessionsLoadedMsg struct {
 	sessions []sessionEntry
 	err      error
@@ -82,7 +94,7 @@ type sessionsLoadedMsg struct {
 
 type historyLoadedMsg struct {
 	sessionID string
-	entries   []string
+	entries   []historyEntry
 	err       error
 }
 
@@ -117,7 +129,7 @@ type model struct {
 	width     int
 	height    int
 
-	history []string
+	history []historyEntry
 
 	mode      viewMode
 	menuIdx   int
@@ -247,26 +259,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = ""
 		}
-		var out string
-		if msg.err != nil {
-			out = errStyle.Render(fmt.Sprintf("error: %v", msg.err))
+		switch {
+		case msg.err != nil:
+			out := errStyle.Render(fmt.Sprintf("error: %v", msg.err))
 			if msg.raw != "" {
 				out += "\n" + dimStyle.Render(msg.raw)
 			}
-		} else if msg.res.IsError {
-			out = errStyle.Render("error: " + msg.res.Result)
-		} else {
+			m.appendHistory(outputStyle.Render(out))
+		case msg.res.IsError:
+			m.appendHistory(outputStyle.Render(errStyle.Render("error: " + msg.res.Result)))
+		default:
 			if msg.res.SessionID != "" {
 				m.sessionID = msg.res.SessionID
 			}
-			rendered, err := m.renderer.Render(msg.res.Result)
-			if err != nil {
-				out = msg.res.Result
-			} else {
-				out = strings.TrimRight(rendered, "\n")
-			}
+			m.appendResponse(msg.res.Result)
 		}
-		m.appendHistory(outputStyle.Render(out))
 		if len(m.pendingPrompts) > 0 {
 			next := m.pendingPrompts[0]
 			m.pendingPrompts = m.pendingPrompts[1:]
@@ -288,9 +295,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				"could not load session history: " + msg.err.Error())))
 			return m, nil
 		}
-		m.history = append(msg.entries,
-			outputStyle.Render(promptStyle.Render(
-				fmt.Sprintf("✓ resumed session %s", short(m.sessionID)))))
+		m.history = append(msg.entries, historyEntry{
+			kind: histPrerendered,
+			text: outputStyle.Render(promptStyle.Render(
+				fmt.Sprintf("✓ resumed session %s", short(m.sessionID)))),
+		})
 		m.layout()
 		m.viewport.GotoBottom()
 		return m, nil
@@ -343,7 +352,10 @@ func (m *model) layout() {
 }
 
 func (m model) viewportContent() string {
-	parts := append([]string(nil), m.history...)
+	parts := make([]string, 0, len(m.history)+1)
+	for _, e := range m.history {
+		parts = append(parts, m.renderEntry(e))
+	}
 	if m.busy {
 		s := m.status
 		if s == "" {
@@ -357,8 +369,26 @@ func (m model) viewportContent() string {
 	return strings.Join(parts, "\n\n")
 }
 
+func (m model) renderEntry(e historyEntry) string {
+	switch e.kind {
+	case histResponse:
+		rendered, err := m.renderer.Render(e.text)
+		if err != nil {
+			return outputStyle.Render(e.text)
+		}
+		return outputStyle.Render(strings.TrimRight(rendered, "\n"))
+	default:
+		return e.text
+	}
+}
+
 func (m *model) appendHistory(entry string) {
-	m.history = append(m.history, entry)
+	m.history = append(m.history, historyEntry{kind: histPrerendered, text: entry})
+	m.layout()
+}
+
+func (m *model) appendResponse(raw string) {
+	m.history = append(m.history, historyEntry{kind: histResponse, text: raw})
 	m.layout()
 }
 
@@ -781,7 +811,7 @@ func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.history = nil
 			m.appendHistory(outputStyle.Render(dimStyle.Render(
 				fmt.Sprintf("loading session %s…", short(sid)))))
-			return m, loadHistoryCmd(sid, m.renderer)
+			return m, loadHistoryCmd(sid)
 		}
 	}
 	return m, nil
@@ -1319,7 +1349,7 @@ func sessionPath(sessionID string) (string, error) {
 	return filepath.Join(dir, sessionID+".jsonl"), nil
 }
 
-func loadHistoryCmd(sessionID string, renderer *glamour.TermRenderer) tea.Cmd {
+func loadHistoryCmd(sessionID string) tea.Cmd {
 	return func() tea.Msg {
 		path, err := sessionPath(sessionID)
 		if err != nil {
@@ -1332,7 +1362,7 @@ func loadHistoryCmd(sessionID string, renderer *glamour.TermRenderer) tea.Cmd {
 		defer f.Close()
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 1<<20), 1<<22)
-		var entries []string
+		var entries []historyEntry
 		for sc.Scan() {
 			var rec map[string]any
 			if json.Unmarshal(sc.Bytes(), &rec) != nil {
@@ -1346,7 +1376,10 @@ func loadHistoryCmd(sessionID string, renderer *glamour.TermRenderer) tea.Cmd {
 					continue
 				}
 				if s, ok := msg["content"].(string); ok && strings.TrimSpace(s) != "" {
-					entries = append(entries, userBarStyle.Render(s))
+					entries = append(entries, historyEntry{
+						kind: histPrerendered,
+						text: userBarStyle.Render(s),
+					})
 				}
 			case "assistant":
 				if msg == nil {
@@ -1372,11 +1405,10 @@ func loadHistoryCmd(sessionID string, renderer *glamour.TermRenderer) tea.Cmd {
 				if b.Len() == 0 {
 					continue
 				}
-				rendered, err := renderer.Render(b.String())
-				if err != nil {
-					rendered = b.String()
-				}
-				entries = append(entries, outputStyle.Render(strings.TrimRight(rendered, "\n")))
+				entries = append(entries, historyEntry{
+					kind: histResponse,
+					text: b.String(),
+				})
 			}
 		}
 		return historyLoadedMsg{sessionID: sessionID, entries: entries}
