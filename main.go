@@ -80,7 +80,7 @@ var (
 			PaddingLeft(1)
 	outputStyle   = lipgloss.NewStyle().MarginLeft(5)
 	thinkingStyle = lipgloss.NewStyle().MarginLeft(3)
-	cdBoxStyle    = lipgloss.NewStyle().
+	pathBoxStyle    = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("13")).
 			Padding(0, 1)
@@ -103,13 +103,13 @@ type model struct {
 	sessions  []sessionEntry
 	pickerIdx int
 
-	cdMatches []string
-	cdIdx     int
+	pathMatches []string
+	pathIdx     int
 }
 
 const (
-	cdBoxHeight   = 10
-	cdBoxMinWidth = 32
+	pathBoxHeight   = 10
+	pathBoxMinWidth = 32
 )
 
 func initialModel() model {
@@ -223,7 +223,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.mode == modeInput && !m.busy {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
-			m.refreshCdMatches()
+			m.refreshPathMatches()
 			m.layout()
 			return m, cmd
 		}
@@ -279,14 +279,14 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	items := m.filterSlashCmds()
 	menuOpen := len(items) > 0
-	cdOpen := m.cdActive() && len(m.cdMatches) > 0
+	pickOpen := m.pathPickerActive() && len(m.pathMatches) > 0
 
 	if msg.Mod == 0 {
 		switch msg.Code {
 		case tea.KeyUp:
-			if cdOpen {
-				if m.cdIdx > 0 {
-					m.cdIdx--
+			if pickOpen {
+				if m.pathIdx > 0 {
+					m.pathIdx--
 				}
 				return m, nil
 			}
@@ -297,9 +297,9 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case tea.KeyDown:
-			if cdOpen {
-				if m.cdIdx < len(m.cdMatches)-1 {
-					m.cdIdx++
+			if pickOpen {
+				if m.pathIdx < len(m.pathMatches)-1 {
+					m.pathIdx++
 				}
 				return m, nil
 			}
@@ -310,10 +310,10 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case tea.KeyTab:
-			if cdOpen {
-				pick := m.cdMatches[m.cdIdx]
-				m.input.SetValue("cd " + pick + "/")
-				m.refreshCdMatches()
+			if pickOpen {
+				pick := m.pathMatches[m.pathIdx]
+				m.input.SetValue(m.pathPickerCmd() + " " + pick + "/")
+				m.refreshPathMatches()
 				m.layout()
 				return m, nil
 			}
@@ -335,15 +335,20 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if line == "" {
 				return m, nil
 			}
-			if m.cdActive() {
-				target := strings.TrimSpace(m.cdQuery())
-				if len(m.cdMatches) > 0 {
-					target = m.cdMatches[m.cdIdx]
+			if cmd := m.pathPickerCmd(); cmd != "" {
+				target := strings.TrimSpace(m.pathQuery())
+				if len(m.pathMatches) > 0 {
+					target = m.pathMatches[m.pathIdx]
 				}
 				m.input.Reset()
-				m.refreshCdMatches()
+				m.refreshPathMatches()
 				m.layout()
-				return m.doCd(target)
+				return m.runPathCommand(cmd, target)
+			}
+			if cmd := bareCommand(line); cmd != "" {
+				m.input.Reset()
+				m.layout()
+				return m.runPathCommand(cmd, "")
 			}
 			m.input.Reset()
 			m.menuIdx = 0
@@ -360,9 +365,201 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if items := m.filterSlashCmds(); m.menuIdx >= len(items) {
 		m.menuIdx = 0
 	}
-	m.refreshCdMatches()
+	m.refreshPathMatches()
 	m.layout()
 	return m, cmd
+}
+
+func (m model) runPathCommand(cmd, target string) (tea.Model, tea.Cmd) {
+	switch cmd {
+	case "cd":
+		return m.doCd(target)
+	case "ls":
+		return m.doLs(target)
+	}
+	return m, nil
+}
+
+func hasGlob(p string) bool {
+	return strings.ContainsAny(p, "*?[")
+}
+
+func resolvePath(p string) string {
+	if p == "" {
+		p = "."
+	}
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			if p == "~" {
+				p = home
+			} else {
+				p = filepath.Join(home, p[2:])
+			}
+		}
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return p
+	}
+	return abs
+}
+
+func (m model) doLs(target string) (tea.Model, tea.Cmd) {
+	resolved := resolvePath(target)
+
+	var paths []string
+	if hasGlob(resolved) {
+		matches, err := filepath.Glob(resolved)
+		if err != nil {
+			m.appendHistory(outputStyle.Render(errStyle.Render("ls: " + err.Error())))
+			return m, nil
+		}
+		if len(matches) == 0 {
+			m.appendHistory(outputStyle.Render(dimStyle.Render("ls: no matches for " + target)))
+			return m, nil
+		}
+		paths = matches
+	} else {
+		info, err := os.Lstat(resolved)
+		if err != nil {
+			m.appendHistory(outputStyle.Render(errStyle.Render("ls: " + err.Error())))
+			return m, nil
+		}
+		if info.IsDir() {
+			entries, err := os.ReadDir(resolved)
+			if err != nil {
+				m.appendHistory(outputStyle.Render(errStyle.Render("ls: " + err.Error())))
+				return m, nil
+			}
+			for _, e := range entries {
+				paths = append(paths, filepath.Join(resolved, e.Name()))
+			}
+		} else {
+			paths = []string{resolved}
+		}
+	}
+
+	out := renderLsOutput(target, paths)
+	m.appendHistory(outputStyle.Render(out))
+	return m, nil
+}
+
+type lsRow struct {
+	name  string
+	info  os.FileInfo
+	isDir bool
+	isExe bool
+	isLnk bool
+	link  string
+}
+
+func renderLsOutput(target string, paths []string) string {
+	rows := make([]lsRow, 0, len(paths))
+	for _, p := range paths {
+		info, err := os.Lstat(p)
+		if err != nil {
+			continue
+		}
+		mode := info.Mode()
+		row := lsRow{
+			name:  filepath.Base(p),
+			info:  info,
+			isDir: info.IsDir(),
+			isExe: !info.IsDir() && mode&0o111 != 0,
+			isLnk: mode&os.ModeSymlink != 0,
+		}
+		if row.isLnk {
+			if t, err := os.Readlink(p); err == nil {
+				row.link = t
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].isDir != rows[j].isDir {
+			return rows[i].isDir
+		}
+		return rows[i].name < rows[j].name
+	})
+
+	var b strings.Builder
+	header := promptStyle.Render(target) + "  " + dimStyle.Render(fmt.Sprintf("(%d items)", len(rows)))
+	b.WriteString(header)
+	b.WriteString("\n")
+
+	if len(rows) == 0 {
+		b.WriteString(dimStyle.Render("  (empty)"))
+		return b.String()
+	}
+
+	sizeW, timeW := 0, 0
+	for _, r := range rows {
+		if w := lipgloss.Width(formatLsSize(r)); w > sizeW {
+			sizeW = w
+		}
+		if w := lipgloss.Width(formatLsTime(r.info.ModTime())); w > timeW {
+			timeW = w
+		}
+	}
+
+	for _, r := range rows {
+		line := fmt.Sprintf("%s  %s  %s  %s",
+			dimStyle.Render(r.info.Mode().String()),
+			padRight(formatLsSize(r), sizeW),
+			padRight(dimStyle.Render(formatLsTime(r.info.ModTime())), timeW),
+			formatLsName(r),
+		)
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func formatLsName(r lsRow) string {
+	switch {
+	case r.isLnk:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("14")).Render(r.name) +
+			dimStyle.Render(" → "+r.link)
+	case r.isDir:
+		return cwdStyle.Render(r.name + "/")
+	case r.isExe:
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("10")).Render(r.name + "*")
+	default:
+		return r.name
+	}
+}
+
+func formatLsSize(r lsRow) string {
+	if r.isDir {
+		return "-"
+	}
+	return humanBytes(r.info.Size())
+}
+
+func formatLsTime(t time.Time) string {
+	return humanDuration(time.Since(t)) + " ago"
+}
+
+func humanBytes(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%dB", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%c", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
+func padRight(s string, w int) string {
+	pad := w - lipgloss.Width(s)
+	if pad <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", pad)
 }
 
 func (m model) doCd(target string) (tea.Model, tea.Cmd) {
@@ -504,13 +701,13 @@ func (m model) View() tea.View {
 
 	body := m.viewBody()
 
-	if m.mode == modeInput && m.cdActive() && m.width > 0 && m.height > 0 {
+	if m.mode == modeInput && m.pathPickerActive() && m.width > 0 && m.height > 0 {
 		canvas := uv.NewScreenBuffer(m.width, m.height)
 		uv.NewStyledString(body).Draw(canvas, image.Rectangle{
 			Min: image.Pt(0, 0),
 			Max: image.Pt(m.width, m.height),
 		})
-		box := m.renderCdBox()
+		box := m.renderPathBox()
 		boxW := lipgloss.Width(box)
 		boxH := lipgloss.Height(box)
 		inputTopY := m.height - m.input.Height()
@@ -568,19 +765,19 @@ func (m model) viewBody() string {
 	return b.String()
 }
 
-func (m model) renderCdBox() string {
-	matches := m.cdMatches
-	contentW := cdBoxMinWidth
+func (m model) renderPathBox() string {
+	matches := m.pathMatches
+	contentW := pathBoxMinWidth
 	for _, mt := range matches {
 		if w := lipgloss.Width(mt) + 2; w > contentW {
 			contentW = w
 		}
 	}
 
-	rows := make([]string, cdBoxHeight)
+	rows := make([]string, pathBoxHeight)
 
 	if len(matches) == 0 {
-		searched, _ := expandTilde(m.cdQuery())
+		searched, _ := expandTilde(m.pathQuery())
 		dir, _ := filepath.Split(searched)
 		if dir == "" {
 			dir = "."
@@ -588,17 +785,17 @@ func (m model) renderCdBox() string {
 		rows[0] = dimStyle.Render("(no matches in " + dir + ")")
 	} else {
 		start := 0
-		if m.cdIdx >= cdBoxHeight {
-			start = m.cdIdx - cdBoxHeight + 1
+		if m.pathIdx >= pathBoxHeight {
+			start = m.pathIdx - pathBoxHeight + 1
 		}
-		end := start + cdBoxHeight
+		end := start + pathBoxHeight
 		if end > len(matches) {
 			end = len(matches)
 		}
 		for i := start; i < end; i++ {
 			marker := "  "
 			entry := matches[i]
-			if i == m.cdIdx {
+			if i == m.pathIdx {
 				marker = selectedStyle.Render("▸ ")
 				entry = selectedStyle.Render(entry)
 			}
@@ -613,7 +810,7 @@ func (m model) renderCdBox() string {
 		}
 	}
 
-	return cdBoxStyle.Render(strings.Join(rows, "\n"))
+	return pathBoxStyle.Render(strings.Join(rows, "\n"))
 }
 
 func (m model) viewPicker() string {
@@ -664,29 +861,59 @@ func (m model) filterSlashCmds() []slashCmd {
 	return out
 }
 
-func (m model) cdActive() bool {
+var pathPickerPrefixes = []string{"cd ", "ls "}
+
+func bareCommand(line string) string {
+	for _, p := range pathPickerPrefixes {
+		cmd := strings.TrimSpace(p)
+		if line == cmd {
+			return cmd
+		}
+	}
+	return ""
+}
+
+func (m model) pathPickerCmd() string {
 	val := m.input.Value()
-	return strings.HasPrefix(val, "cd ") && !strings.Contains(val, "\n")
+	if strings.Contains(val, "\n") {
+		return ""
+	}
+	for _, p := range pathPickerPrefixes {
+		if strings.HasPrefix(val, p) {
+			return strings.TrimSpace(p)
+		}
+	}
+	return ""
 }
 
-func (m model) cdQuery() string {
-	return strings.TrimPrefix(m.input.Value(), "cd ")
+func (m model) pathPickerActive() bool {
+	return m.pathPickerCmd() != ""
 }
 
-func (m *model) refreshCdMatches() {
-	if !m.cdActive() {
-		m.cdMatches = nil
-		m.cdIdx = 0
+func (m model) pathQuery() string {
+	val := m.input.Value()
+	for _, p := range pathPickerPrefixes {
+		if strings.HasPrefix(val, p) {
+			return strings.TrimPrefix(val, p)
+		}
+	}
+	return ""
+}
+
+func (m *model) refreshPathMatches() {
+	if !m.pathPickerActive() {
+		m.pathMatches = nil
+		m.pathIdx = 0
 		return
 	}
-	matches := cdComplete(m.cdQuery())
-	m.cdMatches = matches
-	if m.cdIdx >= len(matches) {
-		m.cdIdx = 0
+	matches := pathComplete(m.pathQuery())
+	m.pathMatches = matches
+	if m.pathIdx >= len(matches) {
+		m.pathIdx = 0
 	}
 }
 
-func cdComplete(query string) []string {
+func pathComplete(query string) []string {
 	expanded, tildeStripped := expandTilde(query)
 	dir, prefix := filepath.Split(expanded)
 	if dir == "" {
