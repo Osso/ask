@@ -148,10 +148,7 @@ func initialModel() model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithStandardStyle(styles.DarkStyle),
-		glamour.WithWordWrap(80),
-	)
+	renderer := newRenderer(100)
 
 	vp := viewport.New()
 	vp.Style = lipgloss.NewStyle().PaddingTop(1)
@@ -175,18 +172,28 @@ func (m model) Init() tea.Cmd {
 	return nil
 }
 
+func newRenderer(width int) *glamour.TermRenderer {
+	style := *styles.DefaultStyles[styles.DarkStyle]
+	zero := uint(0)
+	style.Document.Margin = &zero
+	wrap := width - 5
+	if wrap < 20 {
+		wrap = 20
+	}
+	r, _ := glamour.NewTermRenderer(
+		glamour.WithStyles(style),
+		glamour.WithWordWrap(wrap),
+	)
+	return r
+}
+
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.SetWidth(msg.Width)
-		if r, err := glamour.NewTermRenderer(
-			glamour.WithStandardStyle(styles.DarkStyle),
-			glamour.WithWordWrap(msg.Width-6),
-		); err == nil {
-			m.renderer = r
-		}
+		m.renderer = newRenderer(msg.Width)
 		m.layout()
 		return m, nil
 
