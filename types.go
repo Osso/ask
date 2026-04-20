@@ -159,8 +159,10 @@ type model struct {
 	queue          int
 	pendingPrompts []string
 
-	pendingImage []byte
-	pendingMime  string
+	pendingImage     []byte
+	pendingMime      string
+	pendingThumbCols int
+	pendingThumbRows int
 }
 
 const (

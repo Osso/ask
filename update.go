@@ -136,13 +136,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case imagePastedMsg:
-		debugLog("imagePastedMsg bytes=%d mime=%q err=%v", len(msg.data), msg.mime, msg.err)
+		debugLog("imagePastedMsg bytes=%d mime=%q pngBytes=%d w=%d h=%d err=%v",
+			len(msg.data), msg.mime, len(msg.pngForKitty), msg.width, msg.height, msg.err)
 		if msg.err != nil {
 			m.appendHistory(outputStyle.Render(errStyle.Render("paste: " + msg.err.Error())))
 			return m, nil
 		}
 		m.pendingImage = msg.data
 		m.pendingMime = msg.mime
+		m.pendingThumbCols = 0
+		m.pendingThumbRows = 0
+		if isKitty() && msg.pngForKitty != nil {
+			if err := kittyTransmitPNG(pendingImageID, msg.pngForKitty); err != nil {
+				debugLog("kitty transmit err: %v", err)
+			} else {
+				m.pendingThumbCols, m.pendingThumbRows = thumbnailGrid(msg.width, msg.height)
+			}
+		}
 		m.layout()
 		return m, nil
 
@@ -185,6 +195,8 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Mod == 0 && msg.Code == tea.KeyEsc && m.pendingImage != nil {
 		m.pendingImage = nil
 		m.pendingMime = ""
+		m.pendingThumbCols = 0
+		m.pendingThumbRows = 0
 		m.layout()
 		return m, nil
 	}

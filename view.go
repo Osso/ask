@@ -34,7 +34,10 @@ func (m *model) layout() {
 	atBottom := m.viewport.AtBottom()
 	inputH := m.input.Height()
 	extra := 0
-	if m.pendingImage != nil {
+	switch {
+	case m.pendingThumbRows > 0:
+		extra = m.pendingThumbRows + 1
+	case m.pendingImage != nil:
 		extra = 1
 	}
 	vpH := m.height - 1 - inputH - extra
@@ -188,7 +191,16 @@ func (m model) viewBody() string {
 	var b strings.Builder
 	b.WriteString(m.viewport.View())
 	b.WriteString("\n\n")
-	if m.pendingImage != nil {
+	switch {
+	case m.pendingThumbRows > 0:
+		indent := strings.Repeat(" ", 3)
+		thumb := kittyPlaceholderRows(pendingImageID, m.pendingThumbCols, m.pendingThumbRows)
+		for _, row := range strings.Split(thumb, "\n") {
+			b.WriteString(indent)
+			b.WriteString(row)
+			b.WriteString("\n")
+		}
+	case m.pendingImage != nil:
 		b.WriteString(chipStyle.Render(fmt.Sprintf("[%s  %s]", m.pendingMime, humanBytes(int64(len(m.pendingImage))))))
 		b.WriteString("\n")
 	}

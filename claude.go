@@ -60,6 +60,8 @@ func (m model) sendToClaude(line string) (tea.Model, tea.Cmd) {
 	}
 	m.pendingImage = nil
 	m.pendingMime = ""
+	m.pendingThumbCols = 0
+	m.pendingThumbRows = 0
 	b, _ := json.Marshal(payload)
 	debugLog("sendToClaude writing payload bytes=%d", len(b))
 	if _, err := m.proc.stdin.Write(append(b, '\n')); err != nil {
@@ -92,6 +94,8 @@ func (m model) queueToClaude(line string) (tea.Model, tea.Cmd) {
 	barText := userBarText(line, m.pendingImage != nil)
 	m.pendingImage = nil
 	m.pendingMime = ""
+	m.pendingThumbCols = 0
+	m.pendingThumbRows = 0
 	b, _ := json.Marshal(payload)
 	if _, err := m.proc.stdin.Write(append(b, '\n')); err != nil {
 		m.appendHistory(outputStyle.Render(errStyle.Render("queue write failed: " + err.Error())))

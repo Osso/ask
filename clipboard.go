@@ -9,9 +9,12 @@ import (
 )
 
 type imagePastedMsg struct {
-	data []byte
-	mime string
-	err  error
+	data       []byte
+	mime       string
+	pngForKitty []byte
+	width      int
+	height     int
+	err        error
 }
 
 var acceptedImageMimes = map[string]bool{
@@ -45,6 +48,12 @@ func pasteImageCmd() tea.Cmd {
 		if len(data) == 0 {
 			return imagePastedMsg{err: errors.New("clipboard image was empty")}
 		}
-		return imagePastedMsg{data: data, mime: mime}
+		msg := imagePastedMsg{data: data, mime: mime}
+		if png, w, h, derr := encodeToPNG(data); derr == nil {
+			msg.pngForKitty = png
+			msg.width = w
+			msg.height = h
+		}
+		return msg
 	}
 }
