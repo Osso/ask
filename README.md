@@ -6,7 +6,7 @@ image attachments, a scrollable history, session resume, and a
 custom MCP server that replaces the built-in `AskUserQuestion` tool
 with a far richer tabbed modal.
 
-![ask in action](example.png)
+![Made with VHS](https://vhs.charm.sh/vhs-4bXH7YlhqAMXxv6lqsjjTs.gif)
 
 ## Features
 
