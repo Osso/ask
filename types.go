@@ -1,0 +1,142 @@
+package main
+
+import (
+	"io"
+	"os/exec"
+	"time"
+
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	glamour "charm.land/glamour/v2"
+	lipgloss "charm.land/lipgloss/v2"
+)
+
+type claudeResult struct {
+	Type      string `json:"type"`
+	Subtype   string `json:"subtype"`
+	IsError   bool   `json:"is_error"`
+	Result    string `json:"result"`
+	SessionID string `json:"session_id"`
+}
+
+type slashCmd struct {
+	name string
+	desc string
+}
+
+var slashCmds = []slashCmd{
+	{"/resume", "resume a previous Claude session"},
+	{"/new", "start a new Claude session"},
+	{"/clear", "start a new Claude session"},
+}
+
+type sessionEntry struct {
+	id      string
+	preview string
+	modTime time.Time
+}
+
+type viewMode int
+
+const (
+	modeInput viewMode = iota
+	modeSessionPicker
+)
+
+type claudeDoneMsg struct {
+	res claudeResult
+	err error
+	raw string
+}
+
+type streamStatusMsg struct {
+	status string
+}
+
+type claudeExitedMsg struct {
+	err error
+}
+
+type claudeProc struct {
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+}
+
+type historyKind int
+
+const (
+	histPrerendered historyKind = iota
+	histResponse
+	histUser
+)
+
+type historyEntry struct {
+	kind historyKind
+	text string
+}
+
+type sessionsLoadedMsg struct {
+	sessions []sessionEntry
+	err      error
+}
+
+type historyLoadedMsg struct {
+	sessionID string
+	entries   []historyEntry
+	err       error
+}
+
+var (
+	selectedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
+	dimStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	promptStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	promptArrowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	promptDotStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	cwdStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	errStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	userBarStyle     = lipgloss.NewStyle().
+				MarginLeft(3).
+				Border(lipgloss.NormalBorder(), false, false, false, true).
+				BorderForeground(lipgloss.Color("13")).
+				PaddingLeft(1)
+	outputStyle   = lipgloss.NewStyle().MarginLeft(5)
+	thinkingStyle = lipgloss.NewStyle().MarginLeft(3)
+	pathBoxStyle  = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("13")).
+			Padding(0, 1)
+)
+
+type model struct {
+	input     textarea.Model
+	viewport  viewport.Model
+	spinner   spinner.Model
+	renderer  *glamour.TermRenderer
+	sessionID string
+	busy      bool
+	width     int
+	height    int
+
+	history []historyEntry
+
+	mode      viewMode
+	menuIdx   int
+	sessions  []sessionEntry
+	pickerIdx int
+
+	pathMatches []string
+	pathIdx     int
+
+	status         string
+	streamCh       chan tea.Msg
+	proc           *claudeProc
+	queue          int
+	pendingPrompts []string
+}
+
+const (
+	pathBoxHeight   = 10
+	pathBoxMinWidth = 32
+)
