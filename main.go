@@ -37,6 +37,7 @@ func initialModel() model {
 	vp.Style = lipgloss.NewStyle().PaddingTop(1)
 	vp.FillHeight = true
 	vp.SoftWrap = true
+	vp.MouseWheelEnabled = true
 
 	m := model{
 		mode:     modeInput,

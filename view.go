@@ -38,8 +38,11 @@ func (m *model) layout() {
 	}
 	m.viewport.SetWidth(m.width)
 	m.viewport.SetHeight(vpH)
+	atBottom := m.viewport.AtBottom()
 	m.viewport.SetContent(m.viewportContent())
-	m.viewport.GotoBottom()
+	if atBottom {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m model) viewportContent() string {
@@ -121,6 +124,7 @@ func (m *model) refreshPrompt() {
 func (m model) View() tea.View {
 	var v tea.View
 	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
 
 	body := m.viewBody()
 

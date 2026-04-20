@@ -121,6 +121,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeSessionPicker
 		return m, nil
 
+	case tea.MouseWheelMsg:
+		if m.mode == modeInput {
+			var cmd tea.Cmd
+			m.viewport, cmd = m.viewport.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+
 	case tea.PasteMsg:
 		if m.mode == modeInput && !m.busy {
 			var cmd tea.Cmd
