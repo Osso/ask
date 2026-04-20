@@ -34,13 +34,7 @@ func newRenderer(width int) *glamour.TermRenderer {
 func (m *model) layout() {
 	atBottom := m.viewport.AtBottom()
 	inputH := m.input.Height()
-	extra := 0
-	switch {
-	case m.pendingThumbRows > 0:
-		extra = m.pendingThumbRows + 1
-	case m.pendingImage != nil:
-		extra = 1
-	}
+	extra := m.pendingBlockHeight()
 	vpH := m.height - 1 - inputH - extra
 	if vpH < 1 {
 		vpH = 1
@@ -268,20 +262,111 @@ func (m model) viewBody() string {
 	var b strings.Builder
 	b.WriteString(m.viewport.View())
 	b.WriteString("\n\n")
-	switch {
-	case m.pendingThumbRows > 0:
+	if block := m.renderPendingArea(); block != "" {
 		indent := strings.Repeat(" ", 3)
-		thumb := kittyPlaceholderRows(pendingImageID, m.pendingThumbCols, m.pendingThumbRows)
-		for _, row := range strings.Split(thumb, "\n") {
+		for _, row := range strings.Split(block, "\n") {
 			b.WriteString(indent)
 			b.WriteString(row)
 			b.WriteString("\n")
 		}
-	case m.pendingImage != nil:
-		b.WriteString(chipStyle.Render(fmt.Sprintf("[%s  %s]", m.pendingMime, humanBytes(int64(len(m.pendingImage))))))
 		b.WriteString("\n")
 	}
 	b.WriteString(m.input.View())
+	return b.String()
+}
+
+func (m model) pendingBlockHeight() int {
+	if len(m.pending) == 0 {
+		return 0
+	}
+	maxH := 1
+	for _, p := range m.pending {
+		h := 1
+		if p.thumbRows > 0 {
+			h = p.thumbRows + 2
+		}
+		if h > maxH {
+			maxH = h
+		}
+	}
+	return maxH + 1
+}
+
+func (m model) renderPendingArea() string {
+	if len(m.pending) == 0 {
+		return ""
+	}
+	pieces := make([]string, 0, len(m.pending))
+	widths := make([]int, 0, len(m.pending))
+	heights := make([]int, 0, len(m.pending))
+	for _, p := range m.pending {
+		if p.thumbRows > 0 && p.thumbCols > 0 {
+			piece, w, h := renderBorderedThumb(p.imageID, p.thumbCols, p.thumbRows)
+			pieces = append(pieces, piece)
+			widths = append(widths, w)
+			heights = append(heights, h)
+		} else {
+			text := fmt.Sprintf("[%s  %s]", p.mime, humanBytes(int64(len(p.data))))
+			piece := chipStyle.UnsetMarginLeft().Render(text)
+			pieces = append(pieces, piece)
+			widths = append(widths, lipgloss.Width(piece))
+			heights = append(heights, 1)
+		}
+	}
+	return joinPiecesH(pieces, widths, heights, 2)
+}
+
+func renderBorderedThumb(id uint32, cols, rows int) (string, int, int) {
+	top := thumbBorderStyle.Render("┌" + strings.Repeat("─", cols) + "┐")
+	bottom := thumbBorderStyle.Render("└" + strings.Repeat("─", cols) + "┘")
+	side := thumbBorderStyle.Render("│")
+	var b strings.Builder
+	b.WriteString(top)
+	b.WriteString("\n")
+	placeholders := kittyPlaceholderRows(id, cols, rows)
+	for i, line := range strings.Split(placeholders, "\n") {
+		b.WriteString(side)
+		b.WriteString(line)
+		b.WriteString(side)
+		if i < rows-1 {
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("\n")
+	b.WriteString(bottom)
+	return b.String(), cols + 2, rows + 2
+}
+
+func joinPiecesH(pieces []string, widths, heights []int, gap int) string {
+	if len(pieces) == 0 {
+		return ""
+	}
+	maxH := 0
+	for _, h := range heights {
+		if h > maxH {
+			maxH = h
+		}
+	}
+	rows := make([][]string, len(pieces))
+	for i, p := range pieces {
+		lines := strings.Split(p, "\n")
+		for len(lines) < maxH {
+			lines = append(lines, strings.Repeat(" ", widths[i]))
+		}
+		rows[i] = lines
+	}
+	var b strings.Builder
+	for r := 0; r < maxH; r++ {
+		for i := 0; i < len(pieces); i++ {
+			if i > 0 {
+				b.WriteString(strings.Repeat(" ", gap))
+			}
+			b.WriteString(rows[i][r])
+		}
+		if r < maxH-1 {
+			b.WriteString("\n")
+		}
+	}
 	return b.String()
 }
 

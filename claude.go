@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -11,41 +12,47 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func userContent(line string, image []byte, mime string) any {
-	if image == nil {
+func userContent(line string, attachments []pendingAttachment) any {
+	if len(attachments) == 0 {
 		return line
 	}
 	blocks := []map[string]any{}
 	if line != "" {
 		blocks = append(blocks, map[string]any{"type": "text", "text": line})
 	}
-	blocks = append(blocks, map[string]any{
-		"type": "image",
-		"source": map[string]any{
-			"type":       "base64",
-			"media_type": mime,
-			"data":       base64.StdEncoding.EncodeToString(image),
-		},
-	})
+	for _, a := range attachments {
+		blocks = append(blocks, map[string]any{
+			"type": "image",
+			"source": map[string]any{
+				"type":       "base64",
+				"media_type": a.mime,
+				"data":       base64.StdEncoding.EncodeToString(a.data),
+			},
+		})
+	}
 	return blocks
 }
 
-func userBarText(line string, hasImage bool) string {
+func userBarText(line string, n int) string {
 	switch {
-	case hasImage && line == "":
-		return "[image attached]"
-	case hasImage:
-		return line + "  [image attached]"
-	default:
+	case n == 0:
 		return line
+	case n == 1 && line == "":
+		return "[image attached]"
+	case n == 1:
+		return line + "  [image attached]"
+	case line == "":
+		return fmt.Sprintf("[%d images attached]", n)
+	default:
+		return line + fmt.Sprintf("  [%d images attached]", n)
 	}
 }
 
 func (m model) sendToClaude(line string) (tea.Model, tea.Cmd) {
-	hasImg := m.pendingImage != nil
-	debugLog("sendToClaude line=%q hasImage=%v imageBytes=%d mime=%q procNil=%v sessionID=%q",
-		line, hasImg, len(m.pendingImage), m.pendingMime, m.proc == nil, m.sessionID)
-	m.appendUser(userBarText(line, hasImg))
+	nAtt := len(m.pending)
+	debugLog("sendToClaude line=%q attachments=%d procNil=%v sessionID=%q",
+		line, nAtt, m.proc == nil, m.sessionID)
+	m.appendUser(userBarText(line, nAtt))
 	if err := m.ensureProc(); err != nil {
 		debugLog("ensureProc err: %v", err)
 		m.appendHistory(outputStyle.Render(errStyle.Render("could not start claude: " + err.Error())))
@@ -55,13 +62,10 @@ func (m model) sendToClaude(line string) (tea.Model, tea.Cmd) {
 		"type": "user",
 		"message": map[string]any{
 			"role":    "user",
-			"content": userContent(line, m.pendingImage, m.pendingMime),
+			"content": userContent(line, m.pending),
 		},
 	}
-	m.pendingImage = nil
-	m.pendingMime = ""
-	m.pendingThumbCols = 0
-	m.pendingThumbRows = 0
+	m.pending = nil
 	b, _ := json.Marshal(payload)
 	debugLog("sendToClaude writing payload bytes=%d", len(b))
 	if _, err := m.proc.stdin.Write(append(b, '\n')); err != nil {
@@ -88,14 +92,11 @@ func (m model) queueToClaude(line string) (tea.Model, tea.Cmd) {
 		"type": "user",
 		"message": map[string]any{
 			"role":    "user",
-			"content": userContent(line, m.pendingImage, m.pendingMime),
+			"content": userContent(line, m.pending),
 		},
 	}
-	barText := userBarText(line, m.pendingImage != nil)
-	m.pendingImage = nil
-	m.pendingMime = ""
-	m.pendingThumbCols = 0
-	m.pendingThumbRows = 0
+	barText := userBarText(line, len(m.pending))
+	m.pending = nil
 	b, _ := json.Marshal(payload)
 	if _, err := m.proc.stdin.Write(append(b, '\n')); err != nil {
 		m.appendHistory(outputStyle.Render(errStyle.Render("queue write failed: " + err.Error())))

@@ -12,8 +12,6 @@ import (
 	"strings"
 )
 
-const pendingImageID uint32 = 1
-
 func isKitty() bool {
 	term := os.Getenv("TERM")
 	if strings.Contains(term, "kitty") || strings.Contains(term, "ghostty") {

@@ -147,17 +147,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendHistory(outputStyle.Render(errStyle.Render("paste: " + msg.err.Error())))
 			return m, nil
 		}
-		m.pendingImage = msg.data
-		m.pendingMime = msg.mime
-		m.pendingThumbCols = 0
-		m.pendingThumbRows = 0
+		att := pendingAttachment{data: msg.data, mime: msg.mime}
 		if isKitty() && msg.pngForKitty != nil {
-			if err := kittyTransmitPNG(pendingImageID, msg.pngForKitty); err != nil {
+			m.nextImageID++
+			if m.nextImageID == 0 {
+				m.nextImageID = 1
+			}
+			if err := kittyTransmitPNG(m.nextImageID, msg.pngForKitty); err != nil {
 				debugLog("kitty transmit err: %v", err)
 			} else {
-				m.pendingThumbCols, m.pendingThumbRows = thumbnailGrid(msg.width, msg.height)
+				att.imageID = m.nextImageID
+				att.thumbCols, att.thumbRows = thumbnailGrid(msg.width, msg.height)
 			}
 		}
+		m.pending = append(m.pending, att)
 		m.layout()
 		return m, nil
 
@@ -221,11 +224,8 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Mod == tea.ModCtrl && msg.Code == 'v' {
 		return m, pasteImageCmd()
 	}
-	if msg.Mod == 0 && msg.Code == tea.KeyEsc && m.pendingImage != nil {
-		m.pendingImage = nil
-		m.pendingMime = ""
-		m.pendingThumbCols = 0
-		m.pendingThumbRows = 0
+	if msg.Mod == 0 && msg.Code == tea.KeyEsc && len(m.pending) > 0 {
+		m.pending = nil
 		m.layout()
 		return m, nil
 	}
@@ -285,9 +285,9 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case tea.KeyEnter:
 			val := m.input.Value()
 			line := strings.TrimSpace(val)
-			debugLog("Enter line=%q valLen=%d busy=%v pendingImg=%v pathCmd=%q bare=%q",
-				line, len(val), m.busy, m.pendingImage != nil, m.pathPickerCmd(), bareCommand(line))
-			if line == "" && m.pendingImage == nil {
+			debugLog("Enter line=%q valLen=%d busy=%v pending=%d pathCmd=%q bare=%q",
+				line, len(val), m.busy, len(m.pending), m.pathPickerCmd(), bareCommand(line))
+			if line == "" && len(m.pending) == 0 {
 				return m, nil
 			}
 			if m.busy {

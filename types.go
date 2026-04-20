@@ -130,6 +130,7 @@ var (
 	chipStyle        = lipgloss.NewStyle().MarginLeft(3).Foreground(lipgloss.Color("13")).Bold(true)
 	scrollThumbStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	scrollTrackStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("0"))
+	thumbBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
 	pathBoxStyle  = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("13")).
@@ -162,12 +163,18 @@ type model struct {
 	queue          int
 	pendingPrompts []string
 
-	pendingImage     []byte
-	pendingMime      string
-	pendingThumbCols int
-	pendingThumbRows int
+	pending     []pendingAttachment
+	nextImageID uint32
 
 	scrollbarDragging bool
+}
+
+type pendingAttachment struct {
+	data      []byte
+	mime      string
+	imageID   uint32
+	thumbCols int
+	thumbRows int
 }
 
 const (
