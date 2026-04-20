@@ -422,7 +422,33 @@ func (m model) submitAsk() (model, tea.Cmd) {
 		m.askReply <- askReply{answers: m.askAnswers}
 		m.status = "thinking…"
 	}
+	m.appendHistory(renderAskHistorySummary(m.askQuestions, m.askAnswers))
 	return m.clearAsk(), nil
+}
+
+func renderAskHistorySummary(questions []question, answers []qAnswer) string {
+	var b strings.Builder
+	b.WriteString(promptStyle.Render("✓ answered"))
+	for i, q := range questions {
+		b.WriteString("\n")
+		b.WriteString(dimStyle.Render(fmt.Sprintf("%d. ", i+1)))
+		b.WriteString(q.prompt)
+		b.WriteString("\n   → ")
+		b.WriteString(renderAnswerSummary(q, answers[i]))
+		if note := answers[i].note; note != "" {
+			b.WriteString("\n   ")
+			noteLines := strings.Split(note, "\n")
+			for j, ln := range noteLines {
+				if j == 0 {
+					b.WriteString(askNoteLabelStyle.Render("note: "))
+				} else {
+					b.WriteString("\n         ")
+				}
+				b.WriteString(ln)
+			}
+		}
+	}
+	return outputStyle.Render(b.String())
 }
 
 func renderAnswerSummary(q question, ans qAnswer) string {
