@@ -60,9 +60,6 @@ func (m *model) viewportContent() string {
 		if s == "" {
 			s = "thinking…"
 		}
-		if m.queue > 1 {
-			s = fmt.Sprintf("%s  (+%d queued)", s, m.queue-1)
-		}
 		parts = append(parts, thinkingStyle.Render(m.spinner.View()+dimStyle.Render(s)))
 	}
 	return strings.Join(parts, "\n\n")
@@ -151,8 +148,9 @@ func (m model) View() tea.View {
 	needScroll := m.mode == modeInput && vpH > 0 && m.viewport.TotalLineCount() > vpH
 	needBox := box != ""
 	needModal := m.mode == modeAskQuestion
+	needCancelConfirm := m.cancelTurnConfirming && m.mode == modeInput
 
-	if (needBox || needScroll || needModal) && m.width > 0 && m.height > 0 {
+	if (needBox || needScroll || needModal || needCancelConfirm) && m.width > 0 && m.height > 0 {
 		canvas := uv.NewScreenBuffer(m.width, m.height)
 		uv.NewStyledString(body).Draw(canvas, image.Rectangle{
 			Min: image.Pt(0, 0),
@@ -203,6 +201,40 @@ func (m model) View() tea.View {
 			uv.NewStyledString(modal).Draw(canvas, image.Rectangle{
 				Min: image.Pt(mX, mY),
 				Max: image.Pt(mX+mW, mY+mH),
+			})
+			if m.askConfirmingCancel {
+				confirm := m.viewAskCancelConfirm()
+				cW := lipgloss.Width(confirm)
+				cH := lipgloss.Height(confirm)
+				cX := (m.width - cW) / 2
+				cY := (m.height - cH) / 2
+				if cX < 0 {
+					cX = 0
+				}
+				if cY < 0 {
+					cY = 0
+				}
+				uv.NewStyledString(confirm).Draw(canvas, image.Rectangle{
+					Min: image.Pt(cX, cY),
+					Max: image.Pt(cX+cW, cY+cH),
+				})
+			}
+		}
+		if needCancelConfirm {
+			confirm := m.viewCancelTurnConfirm()
+			cW := lipgloss.Width(confirm)
+			cH := lipgloss.Height(confirm)
+			cX := (m.width - cW) / 2
+			cY := (m.height - cH) / 2
+			if cX < 0 {
+				cX = 0
+			}
+			if cY < 0 {
+				cY = 0
+			}
+			uv.NewStyledString(confirm).Draw(canvas, image.Rectangle{
+				Min: image.Pt(cX, cY),
+				Max: image.Pt(cX+cW, cY+cH),
 			})
 		}
 		v.Content = canvas.Render()

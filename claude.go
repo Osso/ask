@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
@@ -15,6 +16,13 @@ import (
 )
 
 const askUserQuestionHookSettings = `{"hooks":{"PreToolUse":[{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"echo 'BLOCKED: the built-in AskUserQuestion tool is disabled here. Use the mcp__ask__ask_user_question MCP tool instead. It supports pick_one, pick_many, and pick_diagram question kinds and lets you bundle multiple questions in a single call; the user sees them as tabs and submits all answers together.' >&2; exit 2"}]}]}}`
+
+// MCP tool calls block on the user-question modal; default timeout is too short.
+const mcpTimeoutMillis = "86400000"
+
+func claudeEnv() []string {
+	return append(os.Environ(), "MCP_TIMEOUT="+mcpTimeoutMillis)
+}
 
 func userContent(line string, attachments []pendingAttachment) any {
 	if len(attachments) == 0 {
@@ -54,9 +62,11 @@ func userBarText(line string, n int) string {
 
 func (m model) sendToClaude(line string) (tea.Model, tea.Cmd) {
 	nAtt := len(m.pending)
-	debugLog("sendToClaude line=%q attachments=%d procNil=%v sessionID=%q",
-		line, nAtt, m.proc == nil, m.sessionID)
+	debugLog("sendToClaude line=%q attachments=%d procNil=%v busy=%v sessionID=%q",
+		line, nAtt, m.proc == nil, m.busy, m.sessionID)
 	m.appendUser(userBarText(line, nAtt))
+	newProc := m.proc == nil
+	wasIdle := !m.busy
 	if err := m.ensureProc(); err != nil {
 		debugLog("ensureProc err: %v", err)
 		m.appendHistory(outputStyle.Render(errStyle.Render("could not start claude: " + err.Error())))
@@ -71,45 +81,26 @@ func (m model) sendToClaude(line string) (tea.Model, tea.Cmd) {
 	}
 	m.pending = nil
 	b, _ := json.Marshal(payload)
-	debugLog("sendToClaude writing payload bytes=%d", len(b))
+	debugLog("sendToClaude writing payload bytes=%d newProc=%v wasIdle=%v", len(b), newProc, wasIdle)
 	if _, err := m.proc.stdin.Write(append(b, '\n')); err != nil {
 		debugLog("stdin write err: %v", err)
 		m.appendHistory(outputStyle.Render(errStyle.Render("write to claude failed: " + err.Error())))
 		m.killProc()
 		return m, nil
 	}
-	debugLog("sendToClaude wrote ok, busy=true")
 	m.busy = true
 	m.status = "thinking…"
-	m.queue = 1
-	return m, tea.Batch(
-		m.spinner.Tick,
-		nextStreamCmd(m.streamCh),
-	)
-}
-
-func (m model) queueToClaude(line string) (tea.Model, tea.Cmd) {
-	if m.proc == nil {
+	var cmds []tea.Cmd
+	if newProc {
+		cmds = append(cmds, nextStreamCmd(m.streamCh))
+	}
+	if wasIdle {
+		cmds = append(cmds, m.spinner.Tick)
+	}
+	if len(cmds) == 0 {
 		return m, nil
 	}
-	payload := map[string]any{
-		"type": "user",
-		"message": map[string]any{
-			"role":    "user",
-			"content": userContent(line, m.pending),
-		},
-	}
-	barText := userBarText(line, len(m.pending))
-	m.pending = nil
-	b, _ := json.Marshal(payload)
-	if _, err := m.proc.stdin.Write(append(b, '\n')); err != nil {
-		m.appendHistory(outputStyle.Render(errStyle.Render("queue write failed: " + err.Error())))
-		return m, nil
-	}
-	m.queue++
-	m.pendingPrompts = append(m.pendingPrompts, barText)
-	m.layout()
-	return m, nil
+	return m, tea.Batch(cmds...)
 }
 
 func (m *model) ensureProc() error {
@@ -133,6 +124,7 @@ func (m *model) ensureProc() error {
 		args = append(args, "--resume", m.sessionID)
 	}
 	cmd := exec.Command("claude", args...)
+	cmd.Env = claudeEnv()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -171,8 +163,6 @@ func (m *model) killProc() {
 	_ = m.proc.cmd.Process.Kill()
 	m.proc = nil
 	m.streamCh = nil
-	m.queue = 0
-	m.pendingPrompts = nil
 	m.busy = false
 	m.status = ""
 }
@@ -276,6 +266,7 @@ func probeClaudeInitCmd(mcpPort int) tea.Cmd {
 		}
 
 		cmd := exec.CommandContext(ctx, "claude", args...)
+		cmd.Env = claudeEnv()
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return claudeInitLoadedMsg{err: err}

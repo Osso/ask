@@ -41,12 +41,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.proc != m.proc {
 			return m, nil
 		}
+		wasIdle := !m.busy
+		m.busy = true
 		m.status = msg.status
 		m.layout()
+		var cmds []tea.Cmd
 		if m.streamCh != nil {
-			return m, nextStreamCmd(m.streamCh)
+			cmds = append(cmds, nextStreamCmd(m.streamCh))
 		}
-		return m, nil
+		if wasIdle {
+			cmds = append(cmds, m.spinner.Tick)
+		}
+		if len(cmds) == 0 {
+			return m, nil
+		}
+		return m, tea.Batch(cmds...)
 
 	case claudeInitLoadedMsg:
 		if msg.err != nil {
@@ -68,10 +77,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		debugLog("claudeExitedMsg err=%v stderrLen=%d", msg.err, len(stderrTail))
 		m.busy = false
 		m.status = ""
-		m.queue = 0
-		m.pendingPrompts = nil
 		m.streamCh = nil
 		m.proc = nil
+		m.dismissCancelTurnConfirmIfIdle()
 		if msg.err != nil || stderrTail != "" {
 			out := "claude exited"
 			if msg.err != nil {
@@ -88,18 +96,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.proc != m.proc {
 			return m, nil
 		}
-		debugLog("claudeDoneMsg err=%v isError=%v resultLen=%d queue=%d",
-			msg.err, msg.res.IsError, len(msg.res.Result), m.queue)
-		if m.queue > 0 {
-			m.queue--
-		}
-		stillBusy := m.queue > 0
-		m.busy = stillBusy
-		if stillBusy {
-			m.status = "thinking…"
-		} else {
-			m.status = ""
-		}
+		debugLog("claudeDoneMsg err=%v isError=%v resultLen=%d",
+			msg.err, msg.res.IsError, len(msg.res.Result))
+		m.busy = false
+		m.status = ""
+		m.dismissCancelTurnConfirmIfIdle()
 		switch {
 		case msg.err != nil:
 			out := errStyle.Render(fmt.Sprintf("error: %v", msg.err))
@@ -115,17 +116,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.appendResponse(msg.res.Result)
 		}
-		if len(m.pendingPrompts) > 0 {
-			next := m.pendingPrompts[0]
-			m.pendingPrompts = m.pendingPrompts[1:]
-			m.appendUser(next)
-		}
-		if stillBusy && m.streamCh != nil {
-			return m, nextStreamCmd(m.streamCh)
+		var cmd tea.Cmd
+		if m.streamCh != nil {
+			cmd = nextStreamCmd(m.streamCh)
 		}
 		m.refreshPathMatches()
 		m.layout()
-		return m, nil
+		return m, cmd
 
 	case historyLoadedMsg:
 		if msg.sessionID != m.sessionID {
@@ -252,9 +249,14 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Mod == tea.ModCtrl && msg.Code == 'd' {
 		return m, tea.Quit
 	}
+	if m.cancelTurnConfirming {
+		return m.updateCancelTurnConfirm(msg)
+	}
 	if msg.Mod == tea.ModCtrl && msg.Code == 'c' {
 		if m.busy {
-			return m.cancelTurn(), nil
+			m.cancelTurnConfirming = true
+			m.cancelTurnChoice = 0
+			return m, nil
 		}
 		m.input.Reset()
 		m.pending = nil
@@ -268,7 +270,9 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.Mod == 0 && msg.Code == tea.KeyEsc {
 		if m.busy {
-			return m.cancelTurn(), nil
+			m.cancelTurnConfirming = true
+			m.cancelTurnChoice = 0
+			return m, nil
 		}
 		if len(m.pending) > 0 {
 			m.pending = nil
@@ -356,11 +360,6 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.recordInputHistory(val)
-			if m.busy {
-				m.input.Reset()
-				m.layout()
-				return m.queueToClaude(val)
-			}
 			if cmd := m.pathPickerCmd(); cmd != "" {
 				target := strings.TrimSpace(m.pathQuery())
 				if len(m.pathMatches) > 0 {
@@ -402,6 +401,49 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	m.layout()
 	return m, cmd
+}
+
+func (m model) updateCancelTurnConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Mod == tea.ModCtrl && msg.Code == 'c':
+		return m.applyCancelTurnConfirm()
+	case msg.Code == tea.KeyEsc, msg.Code == 'n' && msg.Mod == 0:
+		m.cancelTurnConfirming = false
+		m.cancelTurnChoice = 0
+		return m, nil
+	case msg.Code == 'y' && msg.Mod == 0:
+		return m.applyCancelTurnConfirm()
+	case msg.Code == tea.KeyLeft, msg.Code == 'h' && msg.Mod == 0:
+		m.cancelTurnChoice = 0
+		return m, nil
+	case msg.Code == tea.KeyRight, msg.Code == 'l' && msg.Mod == 0:
+		m.cancelTurnChoice = 1
+		return m, nil
+	case msg.Code == tea.KeyTab:
+		m.cancelTurnChoice = 1 - m.cancelTurnChoice
+		return m, nil
+	case msg.Code == tea.KeyEnter:
+		if m.cancelTurnChoice == 1 {
+			return m.applyCancelTurnConfirm()
+		}
+		m.cancelTurnConfirming = false
+		m.cancelTurnChoice = 0
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) applyCancelTurnConfirm() (tea.Model, tea.Cmd) {
+	m.cancelTurnConfirming = false
+	m.cancelTurnChoice = 0
+	return m.cancelTurn(), nil
+}
+
+func (m *model) dismissCancelTurnConfirmIfIdle() {
+	if !m.busy {
+		m.cancelTurnConfirming = false
+		m.cancelTurnChoice = 0
+	}
 }
 
 func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {

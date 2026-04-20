@@ -7,10 +7,13 @@ import (
 	"net"
 	"net/http"
 	"sync/atomic"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+const askProgressInterval = 20 * time.Second
 
 type mcpOption struct {
 	Label   string `json:"label" jsonschema:"short label for the option"`
@@ -105,7 +108,7 @@ func (b *mcpBridge) start(p *tea.Program) {
 	}()
 }
 
-func (b *mcpBridge) askTool(ctx context.Context, _ *mcp.CallToolRequest, in askInput) (*mcp.CallToolResult, askOutput, error) {
+func (b *mcpBridge) askTool(ctx context.Context, req *mcp.CallToolRequest, in askInput) (*mcp.CallToolResult, askOutput, error) {
 	if len(in.Questions) == 0 {
 		return nil, askOutput{}, errors.New("at least one question is required")
 	}
@@ -118,6 +121,11 @@ func (b *mcpBridge) askTool(ctx context.Context, _ *mcp.CallToolRequest, in askI
 		questions: convertMCPQuestions(in.Questions),
 		reply:     reply,
 	})
+	if token := req.Params.GetProgressToken(); token != nil && req.Session != nil {
+		done := make(chan struct{})
+		defer close(done)
+		go b.pingProgress(ctx, req.Session, token, done)
+	}
 	select {
 	case resp := <-reply:
 		if resp.cancelled {
@@ -137,6 +145,27 @@ func (b *mcpBridge) askTool(ctx context.Context, _ *mcp.CallToolRequest, in askI
 		}, out, nil
 	case <-ctx.Done():
 		return nil, askOutput{}, ctx.Err()
+	}
+}
+
+func (b *mcpBridge) pingProgress(ctx context.Context, sess *mcp.ServerSession, token any, done <-chan struct{}) {
+	ticker := time.NewTicker(askProgressInterval)
+	defer ticker.Stop()
+	var n float64
+	for {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n++
+			_ = sess.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+				ProgressToken: token,
+				Progress:      n,
+				Message:       "waiting for user",
+			})
+		}
 	}
 }
 

@@ -172,25 +172,28 @@ type model struct {
 	pathMatches []string
 	pathIdx     int
 
-	status         string
-	streamCh       chan tea.Msg
-	proc           *claudeProc
-	queue          int
-	pendingPrompts []string
+	status   string
+	streamCh chan tea.Msg
+	proc     *claudeProc
 
 	pending     []pendingAttachment
 	nextImageID uint32
 
 	scrollbarDragging bool
 
-	askQuestions  []question
-	askAnswers    []qAnswer
-	askTab        int
-	askCursor     int
-	askEditing    askEditField
-	askNoteBackup string
-	askReply      chan askReply
-	askMode       askMode
+	askQuestions        []question
+	askAnswers          []qAnswer
+	askTab              int
+	askCursor           int
+	askEditing          askEditField
+	askNoteBackup       string
+	askReply            chan askReply
+	askMode             askMode
+	askConfirmingCancel bool
+	askCancelChoice     int
+
+	cancelTurnConfirming bool
+	cancelTurnChoice     int
 
 	mcpPort         int
 	claudeModel     string

@@ -53,6 +53,12 @@ var (
 	askNoteLabelStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("11"))
 	askPlaceholder     = lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Italic(true)
 	askCaretStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("13"))
+	askConfirmBoxStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("9")).
+				Padding(1, 2)
+	askConfirmBtnStyle       = lipgloss.NewStyle().Padding(0, 3).Foreground(lipgloss.Color("8"))
+	askConfirmBtnActiveStyle = lipgloss.NewStyle().Padding(0, 3).Foreground(lipgloss.Color("15")).Background(lipgloss.Color("9")).Bold(true)
 )
 
 const askBoxWidth = 100
@@ -81,6 +87,8 @@ func (m model) clearAsk() model {
 	m.askNoteBackup = ""
 	m.askReply = nil
 	m.askMode = askForMCP
+	m.askConfirmingCancel = false
+	m.askCancelChoice = 0
 	return m
 }
 
@@ -162,6 +170,9 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Mod == tea.ModCtrl && msg.Code == 'd' {
 		return m, tea.Quit
 	}
+	if m.askConfirmingCancel {
+		return m.updateAskCancelConfirm(msg)
+	}
 	if msg.Mod == tea.ModCtrl && msg.Code == 'c' {
 		if m.askReply != nil {
 			m.askReply <- askReply{cancelled: true}
@@ -208,7 +219,9 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch {
 	case msg.Code == tea.KeyEsc:
 		if m.askReply != nil {
-			m.askReply <- askReply{cancelled: true}
+			m.askConfirmingCancel = true
+			m.askCancelChoice = 0
+			return m, nil
 		}
 		return m.clearAsk(), nil
 
@@ -331,6 +344,74 @@ func (m model) advanceAskTab() model {
 		m.askTab = len(m.askQuestions)
 	}
 	return m
+}
+
+func (m model) updateAskCancelConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Mod == tea.ModCtrl && msg.Code == 'c':
+		return m.confirmAskCancel()
+	case msg.Code == tea.KeyEsc, msg.Code == 'n' && msg.Mod == 0:
+		m.askConfirmingCancel = false
+		m.askCancelChoice = 0
+		return m, nil
+	case msg.Code == 'y' && msg.Mod == 0:
+		return m.confirmAskCancel()
+	case msg.Code == tea.KeyLeft, msg.Code == 'h' && msg.Mod == 0:
+		m.askCancelChoice = 0
+		return m, nil
+	case msg.Code == tea.KeyRight, msg.Code == 'l' && msg.Mod == 0:
+		m.askCancelChoice = 1
+		return m, nil
+	case msg.Code == tea.KeyTab:
+		m.askCancelChoice = 1 - m.askCancelChoice
+		return m, nil
+	case msg.Code == tea.KeyEnter:
+		if m.askCancelChoice == 1 {
+			return m.confirmAskCancel()
+		}
+		m.askConfirmingCancel = false
+		m.askCancelChoice = 0
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) confirmAskCancel() (tea.Model, tea.Cmd) {
+	if m.askReply != nil {
+		m.askReply <- askReply{cancelled: true}
+	}
+	m.killProc()
+	m.appendHistory(outputStyle.Render(dimStyle.Render("✗ cancelled")))
+	return m.clearAsk(), nil
+}
+
+func (m model) viewAskCancelConfirm() string {
+	return renderCancelConfirmBox("Cancel this dialog?", "Stops the current claude turn too.", m.askCancelChoice)
+}
+
+func (m model) viewCancelTurnConfirm() string {
+	return renderCancelConfirmBox("Stop this turn?", "Cancels claude immediately.", m.cancelTurnChoice)
+}
+
+func renderCancelConfirmBox(title, sub string, choice int) string {
+	no := askConfirmBtnStyle.Render("No")
+	yes := askConfirmBtnStyle.Render("Yes")
+	if choice == 0 {
+		no = askConfirmBtnActiveStyle.Render("No")
+	} else {
+		yes = askConfirmBtnActiveStyle.Render("Yes")
+	}
+	buttons := lipgloss.JoinHorizontal(lipgloss.Top, no, "   ", yes)
+	help := askHelpStyle.Render("←→ switch · enter confirm · esc back")
+	body := strings.Join([]string{
+		askPromptStyle.Render(title),
+		dimStyle.Render(sub),
+		"",
+		buttons,
+		"",
+		help,
+	}, "\n")
+	return askConfirmBoxStyle.Render(body)
 }
 
 func (m model) submitAsk() (model, tea.Cmd) {
