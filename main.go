@@ -80,6 +80,7 @@ type historyKind int
 const (
 	histPrerendered historyKind = iota
 	histResponse
+	histUser
 )
 
 type historyEntry struct {
@@ -277,7 +278,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.pendingPrompts) > 0 {
 			next := m.pendingPrompts[0]
 			m.pendingPrompts = m.pendingPrompts[1:]
-			m.appendHistory(userBarStyle.Render(next))
+			m.appendUser(next)
 		}
 		if stillBusy && m.streamCh != nil {
 			return m, nextStreamCmd(m.streamCh)
@@ -376,7 +377,13 @@ func (m model) renderEntry(e historyEntry) string {
 		if err != nil {
 			return outputStyle.Render(e.text)
 		}
-		return outputStyle.Render(strings.TrimRight(rendered, "\n"))
+		return outputStyle.Render(strings.Trim(rendered, "\n"))
+	case histUser:
+		w := m.width - 3
+		if w < 20 {
+			w = 20
+		}
+		return userBarStyle.Width(w).Render(e.text)
 	default:
 		return e.text
 	}
@@ -389,6 +396,11 @@ func (m *model) appendHistory(entry string) {
 
 func (m *model) appendResponse(raw string) {
 	m.history = append(m.history, historyEntry{kind: histResponse, text: raw})
+	m.layout()
+}
+
+func (m *model) appendUser(text string) {
+	m.history = append(m.history, historyEntry{kind: histUser, text: text})
 	m.layout()
 }
 
@@ -835,8 +847,7 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 }
 
 func (m model) sendToClaude(line string) (tea.Model, tea.Cmd) {
-	echo := userBarStyle.Render(line)
-	m.appendHistory(echo)
+	m.appendUser(line)
 	if err := m.ensureProc(); err != nil {
 		m.appendHistory(outputStyle.Render(errStyle.Render("could not start claude: " + err.Error())))
 		return m, nil
@@ -1377,8 +1388,8 @@ func loadHistoryCmd(sessionID string) tea.Cmd {
 				}
 				if s, ok := msg["content"].(string); ok && strings.TrimSpace(s) != "" {
 					entries = append(entries, historyEntry{
-						kind: histPrerendered,
-						text: userBarStyle.Render(s),
+						kind: histUser,
+						text: s,
 					})
 				}
 			case "assistant":
