@@ -60,6 +60,10 @@ type claudeDoneMsg struct {
 	raw string
 }
 
+type streamStatusMsg struct {
+	status string
+}
+
 type sessionsLoadedMsg struct {
 	sessions []sessionEntry
 	err      error
@@ -105,6 +109,9 @@ type model struct {
 
 	pathMatches []string
 	pathIdx     int
+
+	status   string
+	streamCh chan tea.Msg
 }
 
 const (
@@ -131,14 +138,9 @@ func initialModel() model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 
-	style := styles.DarkStyleConfig
-	zero := uint(0)
-	style.Document.Margin = &zero
-	style.Document.BlockPrefix = ""
-	style.Document.BlockSuffix = ""
 	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithStyles(style),
-		glamour.WithWordWrap(0),
+		glamour.WithStandardStyle(styles.DarkStyle),
+		glamour.WithWordWrap(80),
 	)
 
 	vp := viewport.New()
@@ -169,6 +171,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.SetWidth(msg.Width)
+		if r, err := glamour.NewTermRenderer(
+			glamour.WithStandardStyle(styles.DarkStyle),
+			glamour.WithWordWrap(msg.Width-6),
+		); err == nil {
+			m.renderer = r
+		}
 		m.layout()
 		return m, nil
 
@@ -181,8 +189,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.layout()
 		return m, cmd
 
+	case streamStatusMsg:
+		m.status = msg.status
+		m.layout()
+		if m.streamCh != nil {
+			return m, nextStreamCmd(m.streamCh)
+		}
+		return m, nil
+
 	case claudeDoneMsg:
 		m.busy = false
+		m.status = ""
+		m.streamCh = nil
 		var out string
 		if msg.err != nil {
 			out = errStyle.Render(fmt.Sprintf("error: %v", msg.err))
@@ -255,7 +273,11 @@ func (m *model) layout() {
 func (m model) viewportContent() string {
 	parts := append([]string(nil), m.history...)
 	if m.busy {
-		parts = append(parts, thinkingStyle.Render(m.spinner.View()+dimStyle.Render("thinking…")))
+		s := m.status
+		if s == "" {
+			s = "thinking…"
+		}
+		parts = append(parts, thinkingStyle.Render(m.spinner.View()+dimStyle.Render(s)))
 	}
 	return strings.Join(parts, "\n\n")
 }
@@ -686,11 +708,15 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 
 func (m model) sendToClaude(line string) (tea.Model, tea.Cmd) {
 	m.busy = true
+	m.status = "thinking…"
 	echo := userBarStyle.Render(line)
 	m.appendHistory(echo)
+	ch := make(chan tea.Msg, 16)
+	m.streamCh = ch
+	startClaudeStream(line, m.sessionID, ch)
 	return m, tea.Batch(
 		m.spinner.Tick,
-		runClaudeCmd(line, m.sessionID),
+		nextStreamCmd(ch),
 	)
 }
 
@@ -989,24 +1015,125 @@ func expandTilde(p string) (string, bool) {
 	return p, false
 }
 
-func runClaudeCmd(prompt, sessionID string) tea.Cmd {
-	return func() tea.Msg {
-		args := []string{"-p", prompt, "--output-format", "json", "--dangerously-skip-permissions"}
+func startClaudeStream(prompt, sessionID string, ch chan tea.Msg) {
+	go func() {
+		defer close(ch)
+		args := []string{"-p", prompt,
+			"--output-format", "stream-json",
+			"--verbose",
+			"--dangerously-skip-permissions"}
 		if sessionID != "" {
 			args = append(args, "--resume", sessionID)
 		}
 		c := exec.Command("claude", args...)
-		var stdout, stderr bytes.Buffer
-		c.Stdout = &stdout
+		stdout, err := c.StdoutPipe()
+		if err != nil {
+			ch <- claudeDoneMsg{err: err}
+			return
+		}
+		var stderr bytes.Buffer
 		c.Stderr = &stderr
-		if err := c.Run(); err != nil {
-			return claudeDoneMsg{err: err, raw: stderr.String()}
+		if err := c.Start(); err != nil {
+			ch <- claudeDoneMsg{err: err, raw: stderr.String()}
+			return
 		}
-		var res claudeResult
-		if err := json.Unmarshal(stdout.Bytes(), &res); err != nil {
-			return claudeDoneMsg{err: err, raw: stdout.String()}
+
+		var final claudeResult
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 1<<20), 1<<22)
+		for sc.Scan() {
+			var ev map[string]any
+			if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+				continue
+			}
+			switch t, _ := ev["type"].(string); t {
+			case "assistant":
+				if status := assistantStatus(ev); status != "" {
+					ch <- streamStatusMsg{status: status}
+				}
+			case "result":
+				if r, _ := ev["result"].(string); r != "" {
+					final.Result = r
+				}
+				if id, _ := ev["session_id"].(string); id != "" {
+					final.SessionID = id
+				}
+				final.IsError, _ = ev["is_error"].(bool)
+				final.Type = "result"
+			}
 		}
-		return claudeDoneMsg{res: res}
+		err = c.Wait()
+		if err != nil && final.Result == "" {
+			ch <- claudeDoneMsg{err: err, raw: stderr.String()}
+			return
+		}
+		ch <- claudeDoneMsg{res: final}
+	}()
+}
+
+func assistantStatus(ev map[string]any) string {
+	msg, _ := ev["message"].(map[string]any)
+	content, _ := msg["content"].([]any)
+	for _, item := range content {
+		m, _ := item.(map[string]any)
+		switch m["type"] {
+		case "thinking":
+			return "thinking…"
+		case "tool_use":
+			name, _ := m["name"].(string)
+			input, _ := m["input"].(map[string]any)
+			return formatToolStatus(name, input)
+		}
+	}
+	return ""
+}
+
+func formatToolStatus(name string, input map[string]any) string {
+	switch name {
+	case "Bash":
+		if d, _ := input["description"].(string); d != "" {
+			return name + ": " + d
+		}
+		if c, _ := input["command"].(string); c != "" {
+			return name + ": " + truncate(c, 60)
+		}
+	case "Read", "Edit", "Write", "NotebookEdit":
+		if p, _ := input["file_path"].(string); p != "" {
+			return name + ": " + filepath.Base(p)
+		}
+	case "Glob", "Grep":
+		if p, _ := input["pattern"].(string); p != "" {
+			return name + ": " + truncate(p, 60)
+		}
+	case "WebFetch", "WebSearch":
+		if u, _ := input["url"].(string); u != "" {
+			return name + ": " + truncate(u, 60)
+		}
+		if q, _ := input["query"].(string); q != "" {
+			return name + ": " + truncate(q, 60)
+		}
+	case "Task":
+		if p, _ := input["subagent_type"].(string); p != "" {
+			return name + ": " + p
+		}
+	}
+	return name
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
+}
+
+func nextStreamCmd(ch chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
 	}
 }
 
