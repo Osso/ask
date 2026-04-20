@@ -66,22 +66,23 @@ type sessionsLoadedMsg struct {
 }
 
 var (
-	selectedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Bold(true)
-	dimStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-	promptStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-	promptArrowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("51")).MarginLeft(3)
-	promptDotStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("36")).MarginLeft(1)
-	errStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	selectedStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("13")).Bold(true)
+	dimStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	promptStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	promptArrowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14"))
+	promptDotStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	cwdStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("12"))
+	errStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	userBarStyle = lipgloss.NewStyle().
 			MarginLeft(3).
 			Border(lipgloss.NormalBorder(), false, false, false, true).
-			BorderForeground(lipgloss.Color("212")).
+			BorderForeground(lipgloss.Color("13")).
 			PaddingLeft(1)
 	outputStyle   = lipgloss.NewStyle().MarginLeft(5)
 	thinkingStyle = lipgloss.NewStyle().MarginLeft(3)
 	cdBoxStyle    = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("212")).
+			BorderForeground(lipgloss.Color("13")).
 			Padding(0, 1)
 )
 
@@ -115,12 +116,6 @@ func initialModel() model {
 	ta := textarea.New()
 	ta.Placeholder = "ask anything (try /resume)"
 	ta.Prompt = ""
-	ta.SetPromptFunc(5, func(info textarea.PromptInfo) string {
-		if info.LineNumber == 0 {
-			return promptArrowStyle.Render("> ")
-		}
-		return promptDotStyle.Render("::: ")
-	})
 	ta.ShowLineNumbers = false
 	ta.EndOfBufferCharacter = ' '
 	ta.CharLimit = 0
@@ -149,8 +144,9 @@ func initialModel() model {
 	vp := viewport.New()
 	vp.Style = lipgloss.NewStyle().PaddingTop(1)
 	vp.FillHeight = true
+	vp.SoftWrap = true
 
-	return model{
+	m := model{
 		mode:     modeInput,
 		input:    ta,
 		viewport: vp,
@@ -159,6 +155,8 @@ func initialModel() model {
 		width:    100,
 		height:   30,
 	}
+	m.refreshPrompt()
+	return m
 }
 
 func (m model) Init() tea.Cmd {
@@ -380,10 +378,57 @@ func (m model) doCd(target string) (tea.Model, tea.Cmd) {
 	m.sessionID = ""
 	m.history = nil
 	cwd, _ := os.Getwd()
+	m.refreshPrompt()
 	m.appendHistory(outputStyle.Render(
 		promptStyle.Render("✓ cd "+cwd) + "  " + dimStyle.Render("(session cleared)"),
 	))
 	return m, nil
+}
+
+func shortCwd() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "?"
+	}
+	home, _ := os.UserHomeDir()
+	p := cwd
+	if home != "" && (cwd == home || strings.HasPrefix(cwd, home+string(os.PathSeparator))) {
+		p = "~" + strings.TrimPrefix(cwd, home)
+	}
+	if p == "~" || p == string(os.PathSeparator) {
+		return p
+	}
+	parts := strings.Split(p, string(os.PathSeparator))
+	last := len(parts) - 1
+	for i, part := range parts {
+		if i == last || part == "" || part == "~" {
+			continue
+		}
+		r := []rune(part)
+		parts[i] = string(r[:1])
+	}
+	return strings.Join(parts, string(os.PathSeparator))
+}
+
+func (m *model) refreshPrompt() {
+	cwd := shortCwd()
+	indent := "   "
+	line0 := indent + cwd + " > "
+	width := lipgloss.Width(line0)
+	contRaw := indent + "::: "
+	contPad := width - lipgloss.Width(contRaw)
+	if contPad < 0 {
+		contPad = 0
+	}
+	cont := contRaw + strings.Repeat(" ", contPad)
+	m.input.SetPromptFunc(width, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return promptArrowStyle.Render(indent) +
+				cwdStyle.Render(cwd) +
+				promptArrowStyle.Render(" > ")
+		}
+		return promptDotStyle.Render(cont)
+	})
 }
 
 func resolveDir(p string) (string, error) {
