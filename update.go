@@ -140,6 +140,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mode = modeSessionPicker
 		return m, nil
 
+	case askToolRequestMsg:
+		debugLog("askToolRequestMsg questions=%d", len(msg.questions))
+		if m.mode == modeAskQuestion {
+			msg.reply <- askReply{cancelled: true}
+			return m, nil
+		}
+		m = m.startAsk(msg.questions)
+		m.askReply = msg.reply
+		return m, nil
+
 	case imagePastedMsg:
 		debugLog("imagePastedMsg bytes=%d mime=%q pngBytes=%d w=%d h=%d err=%v",
 			len(msg.data), msg.mime, len(msg.pngForKitty), msg.width, msg.height, msg.err)
@@ -210,6 +220,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch m.mode {
 		case modeSessionPicker:
 			return m.updatePicker(msg)
+		case modeAskQuestion:
+			return m.updateAsk(msg)
 		default:
 			return m.updateInput(msg)
 		}
@@ -380,6 +392,8 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m.history = nil
 		m.appendHistory(outputStyle.Render(promptStyle.Render("✓ new session")))
 		return m, nil
+	case "/qq":
+		return m.startAsk(mockQuestions()), nil
 	default:
 		m.appendHistory(outputStyle.Render(errStyle.Render("unknown command: " + cmd)))
 		return m, nil

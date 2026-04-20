@@ -150,8 +150,9 @@ func (m model) View() tea.View {
 	vpH := m.viewport.Height()
 	needScroll := m.mode == modeInput && vpH > 0 && m.viewport.TotalLineCount() > vpH
 	needBox := box != ""
+	needModal := m.mode == modeAskQuestion
 
-	if (needBox || needScroll) && m.width > 0 && m.height > 0 {
+	if (needBox || needScroll || needModal) && m.width > 0 && m.height > 0 {
 		canvas := uv.NewScreenBuffer(m.width, m.height)
 		uv.NewStyledString(body).Draw(canvas, image.Rectangle{
 			Min: image.Pt(0, 0),
@@ -185,6 +186,23 @@ func (m model) View() tea.View {
 			uv.NewStyledString(box).Draw(canvas, image.Rectangle{
 				Min: image.Pt(boxX, boxY),
 				Max: image.Pt(boxX+boxW, boxY+boxH),
+			})
+		}
+		if needModal {
+			modal := m.viewAsk()
+			mW := lipgloss.Width(modal)
+			mH := lipgloss.Height(modal)
+			mX := (m.width - mW) / 2
+			mY := (m.height - mH) / 2
+			if mX < 0 {
+				mX = 0
+			}
+			if mY < 0 {
+				mY = 0
+			}
+			uv.NewStyledString(modal).Draw(canvas, image.Rectangle{
+				Min: image.Pt(mX, mY),
+				Max: image.Pt(mX+mW, mY+mH),
 			})
 		}
 		v.Content = canvas.Render()

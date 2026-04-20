@@ -12,6 +12,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+const askUserQuestionHookSettings = `{"hooks":{"PreToolUse":[{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"echo 'BLOCKED: the built-in AskUserQuestion tool is disabled here. Use the mcp__ask__ask_user_question MCP tool instead. It supports pick_one, pick_many, and pick_diagram question kinds and lets you bundle multiple questions in a single call; the user sees them as tabs and submits all answers together.' >&2; exit 2"}]}]}}`
+
 func userContent(line string, attachments []pendingAttachment) any {
 	if len(attachments) == 0 {
 		return line
@@ -117,6 +119,10 @@ func (m *model) ensureProc() error {
 		"--output-format", "stream-json",
 		"--verbose",
 		"--dangerously-skip-permissions",
+	}
+	if m.mcpPort > 0 {
+		args = append(args, "--mcp-config", fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, m.mcpPort))
+		args = append(args, "--settings", askUserQuestionHookSettings)
 	}
 	if m.sessionID != "" {
 		args = append(args, "--resume", m.sessionID)

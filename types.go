@@ -31,6 +31,7 @@ var slashCmds = []slashCmd{
 	{"/resume", "resume a previous Claude session"},
 	{"/new", "start a new Claude session"},
 	{"/clear", "start a new Claude session"},
+	{"/qq", "mock the ask-user-question popup"},
 }
 
 type sessionEntry struct {
@@ -44,6 +45,7 @@ type viewMode int
 const (
 	modeInput viewMode = iota
 	modeSessionPicker
+	modeAskQuestion
 )
 
 type claudeDoneMsg struct {
@@ -167,6 +169,16 @@ type model struct {
 	nextImageID uint32
 
 	scrollbarDragging bool
+
+	askQuestions  []question
+	askAnswers    []qAnswer
+	askTab        int
+	askCursor     int
+	askEditing    askEditField
+	askNoteBackup string
+	askReply      chan askReply
+
+	mcpPort int
 }
 
 type pendingAttachment struct {

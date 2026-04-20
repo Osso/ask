@@ -53,7 +53,15 @@ func initialModel() model {
 }
 
 func main() {
-	p := tea.NewProgram(initialModel())
+	bridge, err := newMCPBridge()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ask: mcp:", err)
+		os.Exit(1)
+	}
+	m := initialModel()
+	m.mcpPort = bridge.port
+	p := tea.NewProgram(m)
+	bridge.start(p)
 	final, err := p.Run()
 	if m, ok := final.(model); ok {
 		m.killProc()
