@@ -92,6 +92,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streamCh = nil
 		m.proc = nil
 		m.dismissCancelTurnConfirmIfIdle()
+		if m.mode == modeApproval {
+			m = m.clearApproval()
+		}
 		if msg.err != nil || stderrTail != "" {
 			out := "claude exited"
 			if msg.err != nil {
@@ -179,6 +182,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.askReply = msg.reply
 		return m, nil
 
+	case approvalRequestMsg:
+		debugLog("approvalRequestMsg tool=%s id=%s", msg.toolName, msg.toolUseID)
+		if m.mode == modeApproval || m.mode == modeAskQuestion {
+			msg.reply <- approvalReply{allow: false}
+			return m, nil
+		}
+		m = m.startApproval(msg)
+		return m, nil
+
 	case imagePastedMsg:
 		debugLog("imagePastedMsg bytes=%d mime=%q pngBytes=%d w=%d h=%d err=%v",
 			len(msg.data), msg.mime, len(msg.pngForKitty), msg.width, msg.height, msg.err)
@@ -251,6 +263,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updatePicker(msg)
 		case modeAskQuestion:
 			return m.updateAsk(msg)
+		case modeApproval:
+			return m.updateApproval(msg)
 		default:
 			return m.updateInput(msg)
 		}

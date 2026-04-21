@@ -148,9 +148,10 @@ func (m model) View() tea.View {
 	needScroll := m.mode == modeInput && vpH > 0 && m.viewport.TotalLineCount() > vpH
 	needBox := box != ""
 	needModal := m.mode == modeAskQuestion
+	needApproval := m.mode == modeApproval
 	needCancelConfirm := m.cancelTurnConfirming && m.mode == modeInput
 
-	if (needBox || needScroll || needModal || needCancelConfirm) && m.width > 0 && m.height > 0 {
+	if (needBox || needScroll || needModal || needApproval || needCancelConfirm) && m.width > 0 && m.height > 0 {
 		canvas := uv.NewScreenBuffer(m.width, m.height)
 		uv.NewStyledString(body).Draw(canvas, image.Rectangle{
 			Min: image.Pt(0, 0),
@@ -219,6 +220,23 @@ func (m model) View() tea.View {
 					Max: image.Pt(cX+cW, cY+cH),
 				})
 			}
+		}
+		if needApproval {
+			modal := m.viewApproval()
+			mW := lipgloss.Width(modal)
+			mH := lipgloss.Height(modal)
+			mX := (m.width - mW) / 2
+			mY := (m.height - mH) / 2
+			if mX < 0 {
+				mX = 0
+			}
+			if mY < 0 {
+				mY = 0
+			}
+			uv.NewStyledString(modal).Draw(canvas, image.Rectangle{
+				Min: image.Pt(mX, mY),
+				Max: image.Pt(mX+mW, mY+mH),
+			})
 		}
 		if needCancelConfirm {
 			confirm := m.viewCancelTurnConfirm()

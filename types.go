@@ -46,6 +46,7 @@ const (
 	modeInput viewMode = iota
 	modeSessionPicker
 	modeAskQuestion
+	modeApproval
 )
 
 type claudeDoneMsg struct {
@@ -210,6 +211,11 @@ type model struct {
 	askMode             askMode
 	askConfirmingCancel bool
 	askCancelChoice     int
+
+	approvalTool   string
+	approvalInput  map[string]any
+	approvalReply  chan approvalReply
+	approvalChoice int
 
 	cancelTurnConfirming bool
 	cancelTurnChoice     int

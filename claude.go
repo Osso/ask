@@ -116,6 +116,7 @@ func (m *model) ensureProc() error {
 	if m.mcpPort > 0 {
 		args = append(args, "--mcp-config", fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, m.mcpPort))
 		args = append(args, "--settings", askUserQuestionHookSettings)
+		args = append(args, "--permission-prompt-tool", "mcp__ask__approval_prompt")
 	}
 	if m.claudeModel != "" {
 		args = append(args, "--model", m.claudeModel)

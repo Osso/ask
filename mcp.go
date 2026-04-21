@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sync/atomic"
@@ -52,6 +53,32 @@ type askToolRequestMsg struct {
 	reply     chan askReply
 }
 
+type approvalIn struct {
+	ToolName  string         `json:"tool_name"`
+	Input     map[string]any `json:"input"`
+	ToolUseID string         `json:"tool_use_id,omitempty"`
+}
+
+type approvalReply struct {
+	allow bool
+}
+
+type approvalRequestMsg struct {
+	toolName  string
+	input     map[string]any
+	toolUseID string
+	reply     chan approvalReply
+}
+
+const approvalToolDescription = `Permission prompt callback wired up via claude's --permission-prompt-tool.
+Do not call this tool directly. It is invoked by claude before running a tool so
+the ask TUI can show an approval modal to the user; the user answers allow or
+deny and the decision is returned as a stringified JSON body.`
+
+// approvalInputSchema is emitted verbatim in tools/list. The low-level
+// Server.AddTool path doesn't auto-generate a schema, so we supply one by hand.
+var approvalInputSchema = json.RawMessage(`{"type":"object","properties":{"tool_name":{"type":"string"},"input":{"type":"object"},"tool_use_id":{"type":"string"}},"required":["tool_name","input"]}`)
+
 const askToolDescription = `Ask the user one or more questions through a tabbed modal in the ask terminal UI.
 
 Each question is one of three kinds:
@@ -94,6 +121,11 @@ func newMCPBridge() (*mcpBridge, error) {
 		Name:        "ask_user_question",
 		Description: askToolDescription,
 	}, b.askTool)
+	b.server.AddTool(&mcp.Tool{
+		Name:        "approval_prompt",
+		Description: approvalToolDescription,
+		InputSchema: approvalInputSchema,
+	}, b.approvalTool)
 	return b, nil
 }
 
@@ -145,6 +177,58 @@ func (b *mcpBridge) askTool(ctx context.Context, req *mcp.CallToolRequest, in as
 		}, out, nil
 	case <-ctx.Done():
 		return nil, askOutput{}, ctx.Err()
+	}
+}
+
+// approvalTool is registered via the low-level Server.AddTool. That path skips
+// auto-populating CallToolResult.StructuredContent and auto-running our output
+// through jsonschema defaults/validation, so the wire response is exactly the
+// stringified-JSON text block claude's --permission-prompt-tool expects.
+func (b *mcpBridge) approvalTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	var in approvalIn
+	if len(req.Params.Arguments) > 0 {
+		if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
+			return nil, fmt.Errorf("approval_prompt: %w", err)
+		}
+	}
+	p := b.program.Load()
+	if p == nil {
+		return nil, errors.New("ask UI not ready")
+	}
+	reply := make(chan approvalReply, 1)
+	p.Send(approvalRequestMsg{
+		toolName:  in.ToolName,
+		input:     in.Input,
+		toolUseID: in.ToolUseID,
+		reply:     reply,
+	})
+	if token := req.Params.GetProgressToken(); token != nil && req.Session != nil {
+		done := make(chan struct{})
+		defer close(done)
+		go b.pingProgress(ctx, req.Session, token, done)
+	}
+	select {
+	case resp := <-reply:
+		var decision map[string]any
+		if resp.allow {
+			updated := in.Input
+			if updated == nil {
+				updated = map[string]any{}
+			}
+			decision = map[string]any{"behavior": "allow", "updatedInput": updated}
+		} else {
+			decision = map[string]any{"behavior": "deny", "message": "user denied the approval"}
+		}
+		body, err := json.Marshal(decision)
+		if err != nil {
+			return nil, err
+		}
+		debugLog("approval_prompt reply tool=%s allow=%v body=%s", in.ToolName, resp.allow, string(body))
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+		}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
