@@ -27,10 +27,15 @@ func (m model) configItemsAll() []configItem {
 	if m.renderDiffs {
 		diffs = "on"
 	}
+	skipPerms := "off"
+	if m.skipAllPermissions {
+		skipPerms = "on"
+	}
 	return []configItem{
 		{"Quiet Mode", quiet, "quiet"},
 		{"Cursor Blink", blink, "cursorBlink"},
 		{"Render Diffs", diffs, "renderDiffs"},
+		{"Skip All Permissions", skipPerms, "skipAllPermissions"},
 	}
 }
 
@@ -139,6 +144,16 @@ func (m model) updateConfigModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					debugLog("saveConfig err: %v", err)
 				}
 				return m, m.refreshHistoryCmd()
+			case "skipAllPermissions":
+				m.skipAllPermissions = !m.skipAllPermissions
+				v := m.skipAllPermissions
+				cfg, _ := loadConfig()
+				cfg.UI.SkipAllPermissions = &v
+				if err := saveConfig(cfg); err != nil {
+					debugLog("saveConfig err: %v", err)
+				}
+				m.killProc()
+				return m, nil
 			}
 		}
 		return m.clearConfigModal(), nil

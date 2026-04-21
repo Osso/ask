@@ -113,7 +113,9 @@ func (m *model) ensureProc() error {
 		"--output-format", "stream-json",
 		"--verbose",
 		"--include-partial-messages",
-		"--dangerously-skip-permissions",
+	}
+	if m.skipAllPermissions {
+		args = append(args, "--dangerously-skip-permissions")
 	}
 	if m.mcpPort > 0 {
 		args = append(args, "--mcp-config", fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, m.mcpPort))
@@ -382,7 +384,7 @@ func formatToolStatus(name string, input map[string]any) string {
 	return name
 }
 
-func probeClaudeInitCmd(mcpPort int) tea.Cmd {
+func probeClaudeInitCmd(mcpPort int, skipAllPermissions bool) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -391,7 +393,9 @@ func probeClaudeInitCmd(mcpPort int) tea.Cmd {
 			"--input-format", "stream-json",
 			"--output-format", "stream-json",
 			"--verbose",
-			"--dangerously-skip-permissions",
+		}
+		if skipAllPermissions {
+			args = append(args, "--dangerously-skip-permissions")
 		}
 		if mcpPort > 0 {
 			args = append(args,

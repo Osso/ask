@@ -53,20 +53,21 @@ func initialModel(cfg askConfig) model {
 	vp.MouseWheelEnabled = true
 
 	m := model{
-		mode:            modeInput,
-		input:           ta,
-		viewport:        vp,
-		spinner:         sp,
-		renderer:        renderer,
-		width:           100,
-		height:          30,
-		claudeSlashCmds: cfg.Claude.SlashCommands,
-		claudeModel:     cfg.Claude.Model,
-		quietMode:       cfg.UI.QuietMode == nil || *cfg.UI.QuietMode,
-		cursorBlink:     cursorBlink,
-		renderDiffs:     cfg.UI.RenderDiffs == nil || *cfg.UI.RenderDiffs,
-		historyIdx:      -1,
-		fc:              &frameCache{},
+		mode:               modeInput,
+		input:              ta,
+		viewport:           vp,
+		spinner:            sp,
+		renderer:           renderer,
+		width:              100,
+		height:             30,
+		claudeSlashCmds:    cfg.Claude.SlashCommands,
+		claudeModel:        cfg.Claude.Model,
+		quietMode:          cfg.UI.QuietMode == nil || *cfg.UI.QuietMode,
+		cursorBlink:        cursorBlink,
+		renderDiffs:        cfg.UI.RenderDiffs == nil || *cfg.UI.RenderDiffs,
+		skipAllPermissions: cfg.UI.SkipAllPermissions != nil && *cfg.UI.SkipAllPermissions,
+		historyIdx:         -1,
+		fc:                 &frameCache{},
 	}
 	m.refreshPrompt()
 	return m

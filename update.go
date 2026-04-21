@@ -12,7 +12,7 @@ import (
 
 func (m model) Init() tea.Cmd {
 	debugLog("Init mcpPort=%d", m.mcpPort)
-	return tea.Batch(probeClaudeInitCmd(m.mcpPort), cursor.Blink)
+	return tea.Batch(probeClaudeInitCmd(m.mcpPort, m.skipAllPermissions), cursor.Blink)
 }
 
 func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
