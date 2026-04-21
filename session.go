@@ -24,15 +24,15 @@ func sessionPath(sessionID string) (string, error) {
 	return filepath.Join(dir, sessionID+".jsonl"), nil
 }
 
-func loadHistoryCmd(sessionID string, renderDiffs, quietMode bool) tea.Cmd {
+func loadHistoryCmd(sessionID string, renderDiffs, quietMode, silent bool) tea.Cmd {
 	return func() tea.Msg {
 		path, err := sessionPath(sessionID)
 		if err != nil {
-			return historyLoadedMsg{sessionID: sessionID, err: err}
+			return historyLoadedMsg{sessionID: sessionID, err: err, silent: silent}
 		}
 		f, err := os.Open(path)
 		if err != nil {
-			return historyLoadedMsg{sessionID: sessionID, err: err}
+			return historyLoadedMsg{sessionID: sessionID, err: err, silent: silent}
 		}
 		defer f.Close()
 		sc := bufio.NewScanner(f)
@@ -110,7 +110,7 @@ func loadHistoryCmd(sessionID string, renderDiffs, quietMode bool) tea.Cmd {
 				lastAssistantIdx = len(entries) - 1
 			}
 		}
-		return historyLoadedMsg{sessionID: sessionID, entries: entries}
+		return historyLoadedMsg{sessionID: sessionID, entries: entries, silent: silent}
 	}
 }
 

@@ -28,9 +28,9 @@ func (m model) configItemsAll() []configItem {
 		diffs = "on"
 	}
 	return []configItem{
-		{"Toggle Quiet Mode", quiet, "quiet"},
-		{"Toggle Cursor Blink", blink, "cursorBlink"},
-		{"Toggle Render Diffs", diffs, "renderDiffs"},
+		{"Quiet Mode", quiet, "quiet"},
+		{"Cursor Blink", blink, "cursorBlink"},
+		{"Render Diffs", diffs, "renderDiffs"},
 	}
 }
 
@@ -47,6 +47,13 @@ var (
 	configKeyDimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	configHelpStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 )
+
+func (m model) refreshHistoryCmd() tea.Cmd {
+	if m.busy || m.sessionID == "" {
+		return nil
+	}
+	return loadHistoryCmd(m.sessionID, m.renderDiffs, m.quietMode, true)
+}
 
 func (m model) startConfigModal() model {
 	m.mode = modeConfig
@@ -109,7 +116,7 @@ func (m model) updateConfigModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if err := saveConfig(cfg); err != nil {
 					debugLog("saveConfig err: %v", err)
 				}
-				return m, nil
+				return m, m.refreshHistoryCmd()
 			case "cursorBlink":
 				m.cursorBlink = !m.cursorBlink
 				applyCursorBlink(&m.input, m.cursorBlink)
@@ -131,7 +138,7 @@ func (m model) updateConfigModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if err := saveConfig(cfg); err != nil {
 					debugLog("saveConfig err: %v", err)
 				}
-				return m, nil
+				return m, m.refreshHistoryCmd()
 			}
 		}
 		return m.clearConfigModal(), nil

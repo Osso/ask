@@ -162,6 +162,7 @@ type historyLoadedMsg struct {
 	sessionID string
 	entries   []historyEntry
 	err       error
+	silent    bool
 }
 
 var (

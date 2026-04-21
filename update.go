@@ -203,15 +203,24 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		if msg.err != nil {
+			if msg.silent {
+				debugLog("silent history load err: %v", msg.err)
+				return m, nil
+			}
 			m.appendHistory(outputStyle.Render(errStyle.Render(
 				"could not load session history: " + msg.err.Error())))
 			return m, nil
 		}
-		m.history = append(msg.entries, historyEntry{
-			kind: histPrerendered,
-			text: outputStyle.Render(promptStyle.Render(
-				fmt.Sprintf("✓ resumed session %s", short(m.sessionID)))),
-		})
+		if msg.silent {
+			m.history = msg.entries
+		} else {
+			m.history = append(msg.entries, historyEntry{
+				kind: histPrerendered,
+				text: outputStyle.Render(promptStyle.Render(
+					fmt.Sprintf("✓ resumed session %s", short(m.sessionID)))),
+			})
+		}
+		m.lastContentFP = ""
 		m.viewport.GotoBottom()
 		return m, nil
 
@@ -565,7 +574,7 @@ func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.history = nil
 			m.appendHistory(outputStyle.Render(dimStyle.Render(
 				fmt.Sprintf("loading session %s…", short(sid)))))
-			return m, loadHistoryCmd(sid, m.renderDiffs, m.quietMode)
+			return m, loadHistoryCmd(sid, m.renderDiffs, m.quietMode, false)
 		}
 	}
 	return m, nil
