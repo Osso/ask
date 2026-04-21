@@ -8,11 +8,16 @@ import (
 
 type askConfig struct {
 	Claude claudeConfig `json:"claude"`
+	UI     uiConfig     `json:"ui,omitempty"`
 }
 
 type claudeConfig struct {
 	SlashCommands []claudeSlashEntry `json:"slashCommands,omitempty"`
 	Model         string             `json:"model,omitempty"`
+}
+
+type uiConfig struct {
+	QuietMode *bool `json:"quietMode,omitempty"`
 }
 
 func configPath() (string, error) {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -111,6 +112,7 @@ func (m *model) ensureProc() error {
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",
 		"--verbose",
+		"--include-partial-messages",
 		"--dangerously-skip-permissions",
 	}
 	if m.mcpPort > 0 {
@@ -151,9 +153,19 @@ func (m model) cancelTurn() model {
 	if !m.busy && m.proc == nil {
 		return m
 	}
+	m.flushTurnBuffer()
 	m.killProc()
 	m.appendHistory(outputStyle.Render(dimStyle.Render("✗ cancelled")))
 	return m
+}
+
+func (m *model) flushTurnBuffer() {
+	if len(m.turnBuffer) == 0 {
+		return
+	}
+	combined := strings.Join(m.turnBuffer, "\n\n")
+	m.turnBuffer = nil
+	m.appendResponse(combined)
 }
 
 func (m *model) killProc() {
@@ -187,6 +199,13 @@ func readClaudeStream(stdout io.Reader, proc *claudeProc, ch chan tea.Msg) {
 			if todos, ok := assistantTodos(ev); ok {
 				ch <- todoUpdatedMsg{todos: todos, proc: proc}
 			}
+			if text := assistantText(ev); text != "" {
+				ch <- assistantTextMsg{text: text, proc: proc}
+			}
+		case "stream_event":
+			if streamEventEndTurn(ev) {
+				ch <- turnCompleteMsg{proc: proc}
+			}
 		case "result":
 			pending = claudeResult{Type: "result"}
 			if r, _ := ev["result"].(string); r != "" {
@@ -197,6 +216,7 @@ func readClaudeStream(stdout io.Reader, proc *claudeProc, ch chan tea.Msg) {
 			}
 			pending.IsError, _ = ev["is_error"].(bool)
 			ch <- claudeDoneMsg{res: pending, proc: proc}
+			ch <- turnCompleteMsg{proc: proc}
 		}
 	}
 	err := proc.cmd.Wait()
@@ -227,6 +247,38 @@ func assistantTodos(ev map[string]any) ([]todoItem, bool) {
 		return out, true
 	}
 	return nil, false
+}
+
+func streamEventEndTurn(ev map[string]any) bool {
+	event, _ := ev["event"].(map[string]any)
+	if event == nil {
+		return false
+	}
+	if t, _ := event["type"].(string); t != "message_delta" {
+		return false
+	}
+	delta, _ := event["delta"].(map[string]any)
+	reason, _ := delta["stop_reason"].(string)
+	return reason == "end_turn"
+}
+
+func assistantText(ev map[string]any) string {
+	msg, _ := ev["message"].(map[string]any)
+	content, _ := msg["content"].([]any)
+	var parts []string
+	for _, item := range content {
+		b, _ := item.(map[string]any)
+		if b["type"] != "text" {
+			continue
+		}
+		if txt, _ := b["text"].(string); txt != "" {
+			parts = append(parts, txt)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func assistantStatus(ev map[string]any) string {
@@ -274,6 +326,8 @@ func formatToolStatus(name string, input map[string]any) string {
 		if p, _ := input["subagent_type"].(string); p != "" {
 			return name + ": " + p
 		}
+	case "TaskOutput":
+		return "waiting for background task…"
 	}
 	return name
 }

@@ -43,6 +43,12 @@ func loadHistoryCmd(sessionID string) tea.Cmd {
 			if json.Unmarshal(sc.Bytes(), &rec) != nil {
 				continue
 			}
+			if isMeta, _ := rec["isMeta"].(bool); isMeta {
+				continue
+			}
+			if isSide, _ := rec["isSidechain"].(bool); isSide {
+				continue
+			}
 			t, _ := rec["type"].(string)
 			msg, _ := rec["message"].(map[string]any)
 			switch t {
@@ -139,6 +145,12 @@ func readSessionPreview(path string) string {
 	for sc.Scan() {
 		var rec map[string]any
 		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
+			continue
+		}
+		if isMeta, _ := rec["isMeta"].(bool); isMeta {
+			continue
+		}
+		if isSide, _ := rec["isSidechain"].(bool); isSide {
 			continue
 		}
 		if t, _ := rec["type"].(string); t == "queue-operation" {

@@ -49,6 +49,7 @@ func initialModel(cfg askConfig) model {
 		height:          30,
 		claudeSlashCmds: cfg.Claude.SlashCommands,
 		claudeModel:     cfg.Claude.Model,
+		quietMode:       cfg.UI.QuietMode == nil || *cfg.UI.QuietMode,
 		historyIdx:      -1,
 	}
 	m.refreshPrompt()

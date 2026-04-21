@@ -86,6 +86,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			stderrTail = strings.TrimSpace(m.proc.stderr.String())
 		}
 		debugLog("claudeExitedMsg err=%v stderrLen=%d", msg.err, len(stderrTail))
+		m.flushTurnBuffer()
 		m.busy = false
 		m.status = ""
 		m.todos = nil
@@ -113,10 +114,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		debugLog("claudeDoneMsg err=%v isError=%v resultLen=%d",
 			msg.err, msg.res.IsError, len(msg.res.Result))
-		m.busy = false
-		m.status = ""
-		m.todos = nil
 		m.dismissCancelTurnConfirmIfIdle()
+		if msg.res.SessionID != "" {
+			m.sessionID = msg.res.SessionID
+		}
 		switch {
 		case msg.err != nil:
 			out := errStyle.Render(fmt.Sprintf("error: %v", msg.err))
@@ -124,13 +125,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				out += "\n" + dimStyle.Render(msg.raw)
 			}
 			m.appendHistory(outputStyle.Render(out))
+			m.busy = false
+			m.status = ""
+			m.todos = nil
 		case msg.res.IsError:
 			m.appendHistory(outputStyle.Render(errStyle.Render("error: " + msg.res.Result)))
-		default:
-			if msg.res.SessionID != "" {
-				m.sessionID = msg.res.SessionID
-			}
-			m.appendResponse(msg.res.Result)
+			m.busy = false
+			m.status = ""
+			m.todos = nil
 		}
 		var cmd tea.Cmd
 		if m.streamCh != nil {
@@ -139,6 +141,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refreshPathMatches()
 		m.layout()
 		return m, cmd
+
+	case assistantTextMsg:
+		if msg.proc != m.proc {
+			return m, nil
+		}
+		wasIdle := !m.busy
+		m.busy = true
+		if m.quietMode {
+			m.turnBuffer = append(m.turnBuffer, msg.text)
+			m.layout()
+		} else {
+			m.appendResponse(msg.text)
+		}
+		var cmds []tea.Cmd
+		if m.streamCh != nil {
+			cmds = append(cmds, nextStreamCmd(m.streamCh))
+		}
+		if wasIdle {
+			cmds = append(cmds, m.spinner.Tick)
+		}
+		if len(cmds) == 0 {
+			return m, nil
+		}
+		return m, tea.Batch(cmds...)
+
+	case turnCompleteMsg:
+		if msg.proc != m.proc {
+			return m, nil
+		}
+		m.flushTurnBuffer()
+		m.busy = false
+		m.status = ""
+		m.todos = nil
+		m.dismissCancelTurnConfirmIfIdle()
+		m.layout()
+		if m.streamCh != nil {
+			return m, nextStreamCmd(m.streamCh)
+		}
+		return m, nil
 
 	case historyLoadedMsg:
 		if msg.sessionID != m.sessionID {
@@ -265,6 +306,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateAsk(msg)
 		case modeApproval:
 			return m.updateApproval(msg)
+		case modeConfig:
+			return m.updateConfigModal(msg)
 		default:
 			return m.updateInput(msg)
 		}
@@ -533,6 +576,9 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "/model":
 		m = m.startModelPicker()
+		return m, nil
+	case "/config":
+		m = m.startConfigModal()
 		return m, nil
 	}
 	bare := strings.TrimPrefix(cmd, "/")

@@ -32,6 +32,7 @@ var builtinSlashCmds = []slashCmd{
 	{"/new", "start a new Claude session"},
 	{"/clear", "start a new Claude session"},
 	{"/model", "select the Claude model"},
+	{"/config", "configure ask"},
 }
 
 type sessionEntry struct {
@@ -47,6 +48,7 @@ const (
 	modeSessionPicker
 	modeAskQuestion
 	modeApproval
+	modeConfig
 )
 
 type claudeDoneMsg struct {
@@ -59,6 +61,15 @@ type claudeDoneMsg struct {
 type streamStatusMsg struct {
 	status string
 	proc   *claudeProc
+}
+
+type assistantTextMsg struct {
+	text string
+	proc *claudeProc
+}
+
+type turnCompleteMsg struct {
+	proc *claudeProc
 }
 
 type claudeExitedMsg struct {
@@ -219,6 +230,12 @@ type model struct {
 
 	cancelTurnConfirming bool
 	cancelTurnChoice     int
+
+	configFilter string
+	configCursor int
+
+	quietMode  bool
+	turnBuffer []string
 
 	mcpPort         int
 	claudeModel     string
