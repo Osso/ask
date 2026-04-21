@@ -1,5 +1,30 @@
 # Repo notes for coding agents
 
+## Documentation
+
+Always look at the bubbletea 2.0 documentation in the main bubbletea readme
+
+* https://github.com/charmbracelet/bubbletea
+
+and in the godoc
+
+* https://pkg.go.dev/charm.land/bubbletea/v2
+
+and when at all possible, try to use bubbles for common widgets such as input, etc
+
+* https://github.com/charmbracelet/bubbles
+
+you must always, at all times, use crush as a reference, which you must checkout using
+git to /tmp:
+
+* https://github.com/charmbracelet/crush
+
+as it is the cannonical interface in terms of implementation/bubbletea use.
+
+ALL OF THE ABOVE IS NOT OPTIONAL. YOU MUST ALWAYS USE THE ABOVE REFERENCES.
+
+## General info
+
 `ask` is a Bubble Tea v2 TUI that wraps the `claude` CLI. It spawns
 claude in `-p --input-format stream-json --output-format stream-json`
 mode, streams JSON events back, and renders markdown, images, and a
