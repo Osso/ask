@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -59,8 +60,18 @@ type approvalIn struct {
 	ToolUseID string         `json:"tool_use_id,omitempty"`
 }
 
+// permissionRule mirrors the Claude Code permission-rule wire shape:
+// toolName identifies the tool (e.g. "Edit", "Bash"); ruleContent narrows the
+// rule to a specific target (file_path for file tools, command for Bash).
+// An empty ruleContent means "every invocation of this tool".
+type permissionRule struct {
+	toolName    string
+	ruleContent string
+}
+
 type approvalReply struct {
-	allow bool
+	allow    bool
+	remember *permissionRule
 }
 
 type approvalRequestMsg struct {
@@ -105,6 +116,16 @@ type mcpBridge struct {
 	port    int
 	ln      net.Listener
 	server  *mcp.Server
+
+	// alwaysAllow is a per-process session allowlist. When the user picks
+	// "Always allow" in the approval modal, the corresponding permissionRule
+	// lands here, and subsequent approval_prompt invocations matching the
+	// same rule auto-allow without popping a modal. We also return the same
+	// rule back to claude via updatedPermissions so its own session-scoped
+	// permission engine caches it, but the in-memory copy is the belt-and-
+	// suspenders path in case claude re-asks anyway.
+	allowMu     sync.Mutex
+	alwaysAllow map[permissionRule]struct{}
 }
 
 func newMCPBridge() (*mcpBridge, error) {
@@ -113,8 +134,9 @@ func newMCPBridge() (*mcpBridge, error) {
 		return nil, err
 	}
 	b := &mcpBridge{
-		ln:   ln,
-		port: ln.Addr().(*net.TCPAddr).Port,
+		ln:          ln,
+		port:        ln.Addr().(*net.TCPAddr).Port,
+		alwaysAllow: map[permissionRule]struct{}{},
 	}
 	b.server = mcp.NewServer(&mcp.Implementation{Name: "ask", Version: "0.1"}, nil)
 	mcp.AddTool(b.server, &mcp.Tool{
@@ -184,12 +206,28 @@ func (b *mcpBridge) askTool(ctx context.Context, req *mcp.CallToolRequest, in as
 // auto-populating CallToolResult.StructuredContent and auto-running our output
 // through jsonschema defaults/validation, so the wire response is exactly the
 // stringified-JSON text block claude's --permission-prompt-tool expects.
+//
+// Wire shape of the decision body is documented by the Claude Agent SDK: see
+// claude-agent-sdk-python src/claude_agent_sdk/_internal/query.py around the
+// "if isinstance(response, PermissionResultAllow)" branch, and the
+// PermissionUpdate serializer in src/claude_agent_sdk/types.py. An allow can
+// attach updatedPermissions=[{type:"addRules", destination, behavior, rules}]
+// with destination "session" | "userSettings" | "projectSettings" |
+// "localSettings"; "session" keeps the new rule in-memory for the current run.
 func (b *mcpBridge) approvalTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	var in approvalIn
 	if len(req.Params.Arguments) > 0 {
 		if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
 			return nil, fmt.Errorf("approval_prompt: %w", err)
 		}
+	}
+	rule := permissionRuleFor(in.ToolName, in.Input)
+	if b.ruleAlwaysAllowed(rule) {
+		body := buildApprovalBody(true, in.Input, nil)
+		debugLog("approval_prompt cache-hit tool=%s rule=%q body=%s", in.ToolName, rule.ruleContent, string(body))
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+		}, nil
 	}
 	p := b.program.Load()
 	if p == nil {
@@ -209,27 +247,88 @@ func (b *mcpBridge) approvalTool(ctx context.Context, req *mcp.CallToolRequest) 
 	}
 	select {
 	case resp := <-reply:
-		var decision map[string]any
-		if resp.allow {
-			updated := in.Input
-			if updated == nil {
-				updated = map[string]any{}
-			}
-			decision = map[string]any{"behavior": "allow", "updatedInput": updated}
-		} else {
-			decision = map[string]any{"behavior": "deny", "message": "user denied the approval"}
+		if resp.allow && resp.remember != nil {
+			b.rememberAlwaysAllow(*resp.remember)
 		}
-		body, err := json.Marshal(decision)
-		if err != nil {
-			return nil, err
-		}
-		debugLog("approval_prompt reply tool=%s allow=%v body=%s", in.ToolName, resp.allow, string(body))
+		body := buildApprovalBody(resp.allow, in.Input, resp.remember)
+		debugLog("approval_prompt reply tool=%s allow=%v remember=%v body=%s",
+			in.ToolName, resp.allow, resp.remember != nil, string(body))
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
 		}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// permissionRuleFor maps a tool invocation to its narrowest rule scope. For
+// file-touching tools we key on file_path, for Bash on the command, otherwise
+// we fall back to a bare rule (empty ruleContent = any invocation).
+func permissionRuleFor(toolName string, input map[string]any) permissionRule {
+	r := permissionRule{toolName: toolName}
+	switch toolName {
+	case "Edit", "Write", "MultiEdit", "NotebookEdit", "Read":
+		if p, _ := input["file_path"].(string); p != "" {
+			r.ruleContent = p
+		}
+	case "Bash":
+		if c, _ := input["command"].(string); c != "" {
+			r.ruleContent = c
+		}
+	}
+	return r
+}
+
+func (b *mcpBridge) ruleAlwaysAllowed(rule permissionRule) bool {
+	if rule.toolName == "" {
+		return false
+	}
+	b.allowMu.Lock()
+	defer b.allowMu.Unlock()
+	_, ok := b.alwaysAllow[rule]
+	return ok
+}
+
+func (b *mcpBridge) rememberAlwaysAllow(rule permissionRule) {
+	if rule.toolName == "" {
+		return
+	}
+	b.allowMu.Lock()
+	defer b.allowMu.Unlock()
+	b.alwaysAllow[rule] = struct{}{}
+}
+
+// buildApprovalBody serialises the decision in the shape claude's
+// --permission-prompt-tool consumes. When remember is non-nil we also emit a
+// session-scoped addRules PermissionUpdate so claude's own permission engine
+// stops asking for this rule within the current run.
+func buildApprovalBody(allow bool, input map[string]any, remember *permissionRule) []byte {
+	if !allow {
+		body, _ := json.Marshal(map[string]any{"behavior": "deny", "message": "user denied the approval"})
+		return body
+	}
+	updated := input
+	if updated == nil {
+		updated = map[string]any{}
+	}
+	decision := map[string]any{"behavior": "allow", "updatedInput": updated}
+	if remember != nil && remember.toolName != "" {
+		var ruleContent any
+		if remember.ruleContent != "" {
+			ruleContent = remember.ruleContent
+		}
+		decision["updatedPermissions"] = []map[string]any{{
+			"type":        "addRules",
+			"destination": "session",
+			"behavior":    "allow",
+			"rules": []map[string]any{{
+				"toolName":    remember.toolName,
+				"ruleContent": ruleContent,
+			}},
+		}}
+	}
+	body, _ := json.Marshal(decision)
+	return body
 }
 
 func (b *mcpBridge) pingProgress(ctx context.Context, sess *mcp.ServerSession, token any, done <-chan struct{}) {

@@ -13,7 +13,7 @@ with a far richer tabbed modal.
 - **Chat with Claude Code** via streaming JSON input/output
 - **Resume sessions** — `/resume` opens a picker of prior conversations in the current directory
 - **Pick the Claude model** — `/model` opens a picker (default / haiku / sonnet / opus / custom) and persists the choice
-- **Configurable UI** — `/config` toggles quiet mode, cursor blink, and inline diff rendering; persisted to `~/.config/ask/ask.json`
+- **Configurable UI** — `/config` toggles quiet mode, cursor blink, inline diff rendering, and skip-all-permissions; persisted to `~/.config/ask/ask.json`
 - **Inline markdown rendering** with [glamour](https://github.com/charmbracelet/glamour), cached per history entry so typing stays responsive in long chats
 - **Live turn status** — spinner line surfaces the tool Claude is running (`Read: file.go`, `Bash: <description>`, `Grep: <pattern>`, `Task: <subagent>`, …)
 - **Live todo panel** — `TodoWrite` entries render inline as a bordered box with ☐ / ▸ / ✓ markers while the turn is active
@@ -31,7 +31,7 @@ with a far richer tabbed modal.
     - `pick_many` — multi-select checkboxes
     - `pick_diagram` — radio list with an ASCII-art preview box rendered beside it
     - All kinds support `allow_custom` (appends an Enter-your-own free-text option) and per-question notes (`n`)
-  - `approval_prompt` — wired as Claude's `--permission-prompt-tool`, shows a per-tool allow/deny modal before the tool runs
+  - `approval_prompt` — wired as Claude's `--permission-prompt-tool`, shows a per-tool allow / deny / always-allow modal (concise one-line summary — no field dump) before the tool runs; "always allow" records a session-scoped rule so repeat calls for the same file or command skip the prompt
 - **PreToolUse hook** injected at launch that blocks Claude's built-in `AskUserQuestion` and redirects the model to our MCP tool instead
 
 ## Install
@@ -116,11 +116,12 @@ prefix, same as anywhere else a path is expected.
 toggles the highlighted entry and writes the file immediately, `Esc`
 closes the modal.
 
-| Toggle              | Default | What it does                                                                                 |
-|---------------------|---------|----------------------------------------------------------------------------------------------|
-| Toggle Quiet Mode   | on      | When on, assistant text chunks stream silently and the combined turn is rendered once at the end; when off, each chunk is appended as it arrives. |
-| Toggle Cursor Blink | on      | Blinking input cursor at a 650ms cadence. Off keeps a steady cursor.                        |
-| Toggle Render Diffs | on      | Render `Edit` / `Write` / `NotebookEdit` structured patches as inline colored diffs. Off suppresses the diff block (the edit still happens). |
+| Toggle               | Default | What it does                                                                                 |
+|----------------------|---------|----------------------------------------------------------------------------------------------|
+| Quiet Mode           | on      | When on, assistant text chunks stream silently and the combined turn is rendered once at the end; when off, each chunk is appended as it arrives. |
+| Cursor Blink         | on      | Blinking input cursor at a 650ms cadence. Off keeps a steady cursor.                         |
+| Render Diffs         | on      | Render `Edit` / `Write` / `NotebookEdit` structured patches as inline colored diffs. Off suppresses the diff block (the edit still happens). |
+| Skip All Permissions | off     | Pass `--dangerously-skip-permissions` to the `claude` subprocess so every tool call bypasses the approval modal. Toggling kills the running subprocess; the next send respawns with the new flag state. |
 
 Other fields the config file stores automatically:
 
