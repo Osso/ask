@@ -163,9 +163,9 @@ func (m *model) flushTurnBuffer() {
 	if len(m.turnBuffer) == 0 {
 		return
 	}
-	combined := strings.Join(m.turnBuffer, "\n\n")
+	last := m.turnBuffer[len(m.turnBuffer)-1]
 	m.turnBuffer = nil
-	m.appendResponse(combined)
+	m.appendResponse(last)
 }
 
 func (m *model) killProc() {

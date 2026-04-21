@@ -80,7 +80,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		if msg.proc != m.proc {
 			return m, nil
 		}
-		if m.renderDiffs {
+		if m.renderDiffs && !m.quietMode {
 			m.appendHistory(renderDiffBlock(msg.filePath, msg.hunks))
 		}
 		if m.streamCh != nil {
@@ -565,7 +565,7 @@ func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.history = nil
 			m.appendHistory(outputStyle.Render(dimStyle.Render(
 				fmt.Sprintf("loading session %s…", short(sid)))))
-			return m, loadHistoryCmd(sid, m.renderDiffs)
+			return m, loadHistoryCmd(sid, m.renderDiffs, m.quietMode)
 		}
 	}
 	return m, nil

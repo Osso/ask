@@ -24,7 +24,7 @@ func sessionPath(sessionID string) (string, error) {
 	return filepath.Join(dir, sessionID+".jsonl"), nil
 }
 
-func loadHistoryCmd(sessionID string, renderDiffs bool) tea.Cmd {
+func loadHistoryCmd(sessionID string, renderDiffs, quietMode bool) tea.Cmd {
 	return func() tea.Msg {
 		path, err := sessionPath(sessionID)
 		if err != nil {
@@ -38,6 +38,7 @@ func loadHistoryCmd(sessionID string, renderDiffs bool) tea.Cmd {
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 1<<20), 1<<22)
 		var entries []historyEntry
+		lastAssistantIdx := -1
 		for sc.Scan() {
 			var rec map[string]any
 			if json.Unmarshal(sc.Bytes(), &rec) != nil {
@@ -61,9 +62,10 @@ func loadHistoryCmd(sessionID string, renderDiffs bool) tea.Cmd {
 						kind: histUser,
 						text: s,
 					})
+					lastAssistantIdx = -1
 					continue
 				}
-				if renderDiffs {
+				if renderDiffs && !quietMode {
 					result, _ := rec["toolUseResult"].(map[string]any)
 					if fp, hunks, ok := parseStructuredPatch(result); ok {
 						entries = append(entries, historyEntry{
@@ -96,10 +98,16 @@ func loadHistoryCmd(sessionID string, renderDiffs bool) tea.Cmd {
 				if b.Len() == 0 {
 					continue
 				}
+				if quietMode && lastAssistantIdx >= 0 {
+					entries[lastAssistantIdx].text = b.String()
+					entries[lastAssistantIdx].rendered = ""
+					continue
+				}
 				entries = append(entries, historyEntry{
 					kind: histResponse,
 					text: b.String(),
 				})
+				lastAssistantIdx = len(entries) - 1
 			}
 		}
 		return historyLoadedMsg{sessionID: sessionID, entries: entries}
