@@ -119,7 +119,7 @@ closes the modal.
 | Toggle              | Default | What it does                                                                                 |
 |---------------------|---------|----------------------------------------------------------------------------------------------|
 | Toggle Quiet Mode   | on      | When on, assistant text chunks stream silently and the combined turn is rendered once at the end; when off, each chunk is appended as it arrives. |
-| Toggle Cursor Blink | on      | Blinking input cursor at an 800ms cadence. Off keeps a steady cursor.                        |
+| Toggle Cursor Blink | on      | Blinking input cursor at a 650ms cadence. Off keeps a steady cursor.                        |
 | Toggle Render Diffs | on      | Render `Edit` / `Write` / `NotebookEdit` structured patches as inline colored diffs. Off suppresses the diff block (the edit still happens). |
 
 Other fields the config file stores automatically:

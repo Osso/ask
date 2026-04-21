@@ -13,7 +13,7 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-const cursorBlinkSpeed = 800 * time.Millisecond
+const cursorBlinkSpeed = 650 * time.Millisecond
 
 func applyCursorBlink(ta *textarea.Model, enabled bool) {
 	s := ta.Styles()
