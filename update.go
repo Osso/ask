@@ -221,6 +221,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			})
 		}
 		m.lastContentFP = ""
+		m.layout()
 		m.viewport.GotoBottom()
 		return m, nil
 
