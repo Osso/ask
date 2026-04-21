@@ -70,7 +70,7 @@ func (m model) clearAsk() model {
 }
 
 func (m model) startModelPicker() model {
-	options := []string{"default", "haiku", "sonnet", "opus", ollamaModelOption, "Enter your own"}
+	options := []string{"default", "haiku", "sonnet", "sonnet[1m]", "opus", "opus[1m]", ollamaModelOption, "Enter your own"}
 	m = m.startAsk([]question{{
 		kind:     qPickOne,
 		prompt:   "Select Claude model",
