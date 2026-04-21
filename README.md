@@ -14,7 +14,7 @@ with a far richer tabbed modal.
 - **Resume sessions** — `/resume` opens a picker of prior conversations in the current directory
 - **Pick the Claude model** — `/model` opens a picker (default / haiku / sonnet / opus / custom) and persists the choice
 - **Configurable UI** — `/config` toggles quiet mode, cursor blink, inline diff rendering, and skip-all-permissions; persisted to `~/.config/ask/ask.json`
-- **Themes** — pick a palette from `/config` → Theme (14 flavors: `default`, `dracula`, `nord`, `gruvbox`, `tokyo night`, the four Catppuccin variants `latte`/`frappé`/`macchiato`/`mocha`, `rose pine`, `fighter` (Monokai Pro), `love` (crush), `hacker` (Matrix), `amber` (CRT)). Backgrounds, foregrounds, borders, and glamour markdown/syntax highlighting all follow the active theme.
+- **Themes** — pick a palette from `/config` → Theme (15 flavors: `default`, `dracula`, `nord`, `gruvbox`, `tokyo night`, the four Catppuccin variants `latte`/`frappé`/`macchiato`/`mocha` plus the green-leaning Mocha sibling `matcha`, `rose pine`, `fighter` (Monokai Pro), `love` (crush), `hacker` (Matrix), `amber` (CRT)). Backgrounds, foregrounds, borders, and glamour markdown/syntax highlighting all follow the active theme.
 - **Inline markdown rendering** with [glamour](https://github.com/charmbracelet/glamour), cached per history entry so typing stays responsive in long chats
 - **Live turn status** — spinner line surfaces the tool Claude is running (`Read: file.go`, `Bash: <description>`, `Grep: <pattern>`, `Task: <subagent>`, …)
 - **Live todo panel** — `TodoWrite` entries render inline as a bordered box with ☐ / ▸ / ✓ markers while the turn is active

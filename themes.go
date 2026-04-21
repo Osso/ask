@@ -43,6 +43,7 @@ var themeRegistry = []theme{
 	catppuccinFrappeTheme(),
 	catppuccinMacchiatoTheme(),
 	catppuccinMochaTheme(),
+	matchaTheme(),
 	rosePineTheme(),
 	fighterTheme(),
 	hackerTheme(),
@@ -155,12 +156,17 @@ func tokyoNightTheme() theme {
 	}
 }
 
-// Catppuccin: four official flavors with a consistent role mapping.
-// Pink→accent, Sky→accentAlt, Blue→prompt, Teal→promptDot, Green→success,
-// Red→errorFG, Yellow→warn, Overlay0→dim, Subtext1→muted, Mauve→tabActive,
-// Surface0→rowHL, Base→background+scrollTrack. inverseFG/darkFG flip between
-// the three dark flavors (Text on colored bg, Base on warn) and Latte (Base on
-// colored bg, Text on warn) so contrast stays legible in both directions.
+// Catppuccin: four official flavors. Latte (light) uses the canonical
+// Pink→accent, Sky→accentAlt, Blue→prompt, Teal→promptDot, Mauve→tabActive
+// mapping with Green/Red/Yellow as semantic colors. The three dark flavors
+// each lean into a different slice of the palette so they don't feel like
+// the same theme at different brightness levels: Frappé is warm peach/teal,
+// Macchiato is royal mauve/lavender/pink (with Maroon error and Peach warn
+// to match the warmer register), Mocha is cool sky/sapphire with a Mauve
+// tab pop. inverseFG/darkFG flip between the dark trio (Text on colored bg,
+// Base on warn) and Latte (Base on colored bg, Text on warn) so contrast
+// stays legible both ways. Backgrounds sit one step below Base — Mantle for
+// the dark trio, Crust for Latte — rather than on Base itself.
 
 func catppuccinLatteTheme() theme {
 	return theme{
@@ -172,14 +178,14 @@ func catppuccinLatteTheme() theme {
 		success:     lipgloss.Color("#40A02B"),
 		errorFG:     lipgloss.Color("#D20F39"),
 		warn:        lipgloss.Color("#DF8E1D"),
-		dim:         lipgloss.Color("#9CA0B0"),
+		dim:         lipgloss.Color("#8C8FA1"),
 		muted:       lipgloss.Color("#5C5F77"),
 		inverseFG:   lipgloss.Color("#EFF1F5"),
 		darkFG:      lipgloss.Color("#4C4F69"),
-		rowHL:       lipgloss.Color("#CCD0DA"),
-		scrollTrack: lipgloss.Color("#E6E9EF"),
+		rowHL:       lipgloss.Color("#ACB0BE"),
+		scrollTrack: lipgloss.Color("#BCC0CC"),
 		tabActive:   lipgloss.Color("#8839EF"),
-		background:  lipgloss.Color("#EFF1F5"),
+		background:  lipgloss.Color("#CCD0DA"),
 		foreground:  lipgloss.Color("#4C4F69"),
 	}
 }
@@ -187,10 +193,10 @@ func catppuccinLatteTheme() theme {
 func catppuccinFrappeTheme() theme {
 	return theme{
 		name:        "frappé",
-		accent:      lipgloss.Color("#F4B8E4"),
-		accentAlt:   lipgloss.Color("#99D1DB"),
-		prompt:      lipgloss.Color("#8CAAEE"),
-		promptDot:   lipgloss.Color("#81C8BE"),
+		accent:      lipgloss.Color("#EF9F76"),
+		accentAlt:   lipgloss.Color("#81C8BE"),
+		prompt:      lipgloss.Color("#BABBF1"),
+		promptDot:   lipgloss.Color("#F2D5CF"),
 		success:     lipgloss.Color("#A6D189"),
 		errorFG:     lipgloss.Color("#E78284"),
 		warn:        lipgloss.Color("#E5C890"),
@@ -199,41 +205,41 @@ func catppuccinFrappeTheme() theme {
 		inverseFG:   lipgloss.Color("#C6D0F5"),
 		darkFG:      lipgloss.Color("#303446"),
 		rowHL:       lipgloss.Color("#414559"),
-		scrollTrack: lipgloss.Color("#303446"),
-		tabActive:   lipgloss.Color("#CA9EE6"),
-		background:  lipgloss.Color("#303446"),
+		scrollTrack: lipgloss.Color("#292C3C"),
+		tabActive:   lipgloss.Color("#EA999C"),
+		background:  lipgloss.Color("#292C3C"),
 	}
 }
 
 func catppuccinMacchiatoTheme() theme {
 	return theme{
 		name:        "macchiato",
-		accent:      lipgloss.Color("#F5BDE6"),
-		accentAlt:   lipgloss.Color("#91D7E3"),
-		prompt:      lipgloss.Color("#8AADF4"),
-		promptDot:   lipgloss.Color("#8BD5CA"),
+		accent:      lipgloss.Color("#C6A0F6"),
+		accentAlt:   lipgloss.Color("#7DC4E4"),
+		prompt:      lipgloss.Color("#B7BDF8"),
+		promptDot:   lipgloss.Color("#F5BDE6"),
 		success:     lipgloss.Color("#A6DA95"),
-		errorFG:     lipgloss.Color("#ED8796"),
-		warn:        lipgloss.Color("#EED49F"),
+		errorFG:     lipgloss.Color("#EE99A0"),
+		warn:        lipgloss.Color("#F5A97F"),
 		dim:         lipgloss.Color("#6E738D"),
 		muted:       lipgloss.Color("#B8C0E0"),
 		inverseFG:   lipgloss.Color("#CAD3F5"),
 		darkFG:      lipgloss.Color("#24273A"),
 		rowHL:       lipgloss.Color("#363A4F"),
-		scrollTrack: lipgloss.Color("#24273A"),
-		tabActive:   lipgloss.Color("#C6A0F6"),
-		background:  lipgloss.Color("#24273A"),
+		scrollTrack: lipgloss.Color("#1E2030"),
+		tabActive:   lipgloss.Color("#8AADF4"),
+		background:  lipgloss.Color("#1E2030"),
 	}
 }
 
 func catppuccinMochaTheme() theme {
 	return theme{
 		name:        "mocha",
-		accent:      lipgloss.Color("#F5C2E7"),
-		accentAlt:   lipgloss.Color("#89DCEB"),
+		accent:      lipgloss.Color("#89DCEB"),
+		accentAlt:   lipgloss.Color("#74C7EC"),
 		prompt:      lipgloss.Color("#89B4FA"),
-		promptDot:   lipgloss.Color("#94E2D5"),
-		success:     lipgloss.Color("#A6E3A1"),
+		promptDot:   lipgloss.Color("#A6E3A1"),
+		success:     lipgloss.Color("#94E2D5"),
 		errorFG:     lipgloss.Color("#F38BA8"),
 		warn:        lipgloss.Color("#F9E2AF"),
 		dim:         lipgloss.Color("#6C7086"),
@@ -241,9 +247,35 @@ func catppuccinMochaTheme() theme {
 		inverseFG:   lipgloss.Color("#CDD6F4"),
 		darkFG:      lipgloss.Color("#1E1E2E"),
 		rowHL:       lipgloss.Color("#313244"),
-		scrollTrack: lipgloss.Color("#1E1E2E"),
+		scrollTrack: lipgloss.Color("#181825"),
 		tabActive:   lipgloss.Color("#CBA6F7"),
-		background:  lipgloss.Color("#1E1E2E"),
+		background:  lipgloss.Color("#181825"),
+	}
+}
+
+// matchaTheme is a Mocha sibling built on the same dark palette, but the
+// role mapping pivots to Green/Yellow so the whole page reads as lime/matcha
+// instead of Mocha's sky/sapphire. Lavender + Mauve cover the cool accents
+// so there's still some purple tension against the green, and Peach picks up
+// warn since Yellow is claimed by accentAlt.
+func matchaTheme() theme {
+	return theme{
+		name:        "matcha",
+		accent:      lipgloss.Color("#A6E3A1"),
+		accentAlt:   lipgloss.Color("#F9E2AF"),
+		prompt:      lipgloss.Color("#B4BEFE"),
+		promptDot:   lipgloss.Color("#CBA6F7"),
+		success:     lipgloss.Color("#A6E3A1"),
+		errorFG:     lipgloss.Color("#F38BA8"),
+		warn:        lipgloss.Color("#FAB387"),
+		dim:         lipgloss.Color("#6C7086"),
+		muted:       lipgloss.Color("#BAC2DE"),
+		inverseFG:   lipgloss.Color("#CDD6F4"),
+		darkFG:      lipgloss.Color("#1E1E2E"),
+		rowHL:       lipgloss.Color("#313244"),
+		scrollTrack: lipgloss.Color("#181825"),
+		tabActive:   lipgloss.Color("#89B4FA"),
+		background:  lipgloss.Color("#181825"),
 	}
 }
 
