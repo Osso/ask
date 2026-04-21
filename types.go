@@ -251,6 +251,12 @@ type model struct {
 	askConfirmingCancel bool
 	askCancelChoice     int
 
+	askOllamaActive bool
+	askOllamaField  int
+	askOllamaHost   string
+	askOllamaModel  string
+	askOllamaErr    string
+
 	approvalTool   string
 	approvalInput  map[string]any
 	approvalReply  chan approvalReply
@@ -274,10 +280,13 @@ type model struct {
 
 	mcpPort         int
 	claudeModel     string
+	ollamaHost      string
+	ollamaModel     string
 	claudeSlashCmds []claudeSlashEntry
 
 	inputHistory []string
 	historyIdx   int
+	historyDraft string
 
 	exitArmed bool
 

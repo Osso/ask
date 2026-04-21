@@ -62,6 +62,8 @@ func initialModel(cfg askConfig) model {
 		height:             30,
 		claudeSlashCmds:    cfg.Claude.SlashCommands,
 		claudeModel:        cfg.Claude.Model,
+		ollamaHost:         cfg.Claude.Ollama.Host,
+		ollamaModel:        cfg.Claude.Ollama.Model,
 		quietMode:          cfg.UI.QuietMode == nil || *cfg.UI.QuietMode,
 		cursorBlink:        cursorBlink,
 		renderDiffs:        cfg.UI.RenderDiffs == nil || *cfg.UI.RenderDiffs,

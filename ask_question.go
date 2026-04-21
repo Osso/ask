@@ -89,24 +89,46 @@ func (m model) clearAsk() model {
 	m.askMode = askForMCP
 	m.askConfirmingCancel = false
 	m.askCancelChoice = 0
+	m = m.clearAskOllamaConfig()
 	return m
 }
 
 func (m model) startModelPicker() model {
-	options := []string{"default", "haiku", "sonnet", "opus", "Enter your own"}
-	prompt := "Select Claude model"
-	if m.claudeModel != "" {
-		prompt += " (current: " + m.claudeModel + ")"
-	} else {
-		prompt += " (current: default)"
-	}
+	options := []string{"default", "haiku", "sonnet", "opus", ollamaModelOption, "Enter your own"}
 	m = m.startAsk([]question{{
 		kind:     qPickOne,
-		prompt:   prompt,
+		prompt:   "Select Claude model",
 		options:  options,
 		diagrams: make([]string, len(options)),
 	}})
 	m.askMode = askForModel
+
+	selected := 0
+	switch {
+	case strings.EqualFold(m.claudeModel, "ollama"):
+		for i, opt := range options {
+			if opt == ollamaModelOption {
+				selected = i
+				break
+			}
+		}
+	case m.claudeModel != "":
+		selected = len(options) - 1
+		for i, opt := range options {
+			if strings.EqualFold(opt, "Enter your own") || opt == ollamaModelOption {
+				continue
+			}
+			if strings.EqualFold(opt, m.claudeModel) {
+				selected = i
+				break
+			}
+		}
+		if selected == len(options)-1 {
+			m.askAnswers[0].custom = m.claudeModel
+		}
+	}
+	m.askAnswers[0].picks[selected] = true
+	m.askCursor = selected
 	return m
 }
 
@@ -119,9 +141,12 @@ func (m model) applyModelPick() (model, tea.Cmd) {
 			if idx < 0 || idx >= len(q.options) {
 				continue
 			}
-			if strings.EqualFold(q.options[idx], "Enter your own") {
+			switch {
+			case q.options[idx] == ollamaModelOption:
+				picked = "ollama"
+			case strings.EqualFold(q.options[idx], "Enter your own"):
 				picked = strings.TrimSpace(ans.custom)
-			} else {
+			default:
 				picked = q.options[idx]
 			}
 			break
@@ -142,9 +167,12 @@ func (m model) applyModelPick() (model, tea.Cmd) {
 		debugLog("saveConfig err: %v", err)
 	}
 	var msg string
-	if picked == "" {
+	switch picked {
+	case "":
 		msg = "✓ model cleared (using claude default)"
-	} else {
+	case "ollama":
+		msg = fmt.Sprintf("✓ model set to ollama (%s · %s)", cfg.Claude.Ollama.Host, cfg.Claude.Ollama.Model)
+	default:
 		msg = "✓ model set to " + picked
 	}
 	m.appendHistory(outputStyle.Render(promptStyle.Render(msg)))
@@ -172,6 +200,9 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.askConfirmingCancel {
 		return m.updateAskCancelConfirm(msg)
+	}
+	if m.askOllamaActive {
+		return m.updateAskOllamaConfig(msg)
 	}
 	if msg.Mod == tea.ModCtrl && msg.Code == 'c' {
 		if m.askReply != nil {
@@ -226,6 +257,9 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.clearAsk(), nil
 
 	case msg.Code == tea.KeyTab && msg.Mod&tea.ModShift != 0, msg.Code == tea.KeyLeft:
+		if m.askMode == askForModel {
+			return m, nil
+		}
 		m.askTab--
 		if m.askTab < 0 {
 			m.askTab = 0
@@ -234,6 +268,9 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msg.Code == tea.KeyTab, msg.Code == tea.KeyRight:
+		if m.askMode == askForModel {
+			return m, nil
+		}
 		m.askTab++
 		maxTab := len(m.askQuestions)
 		if m.askTab > maxTab {
@@ -277,6 +314,9 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case msg.Code == tea.KeyEnter:
+		if m.cursorOnOllamaConfig() {
+			return m.startAskOllamaConfig(), nil
+		}
 		if q.kind == qPickOne || q.kind == qPickDiagram {
 			if onCustom && ans.custom == "" {
 				return m, nil
@@ -479,7 +519,6 @@ func (m model) viewAsk() string {
 	if len(m.askQuestions) == 0 {
 		return ""
 	}
-	tabsLine := m.renderAskTabs()
 	var content string
 	if m.isOnConfirmTab() {
 		content = m.renderAskConfirm()
@@ -487,7 +526,12 @@ func (m model) viewAsk() string {
 		content = m.renderAskQuestion(m.askTab)
 	}
 	help := m.renderAskHelp()
-	body := strings.Join([]string{tabsLine, "", content, "", help}, "\n")
+	var body string
+	if m.askMode == askForModel {
+		body = strings.Join([]string{content, "", help}, "\n")
+	} else {
+		body = strings.Join([]string{m.renderAskTabs(), "", content, "", help}, "\n")
+	}
 	innerW := askBoxWidth - 6
 	if innerW > m.width-6 {
 		innerW = m.width - 6
@@ -546,7 +590,7 @@ func (m model) renderAskQuestion(idx int) string {
 		isCursor := i == m.askCursor
 		isPicked := ans.picks[i]
 		isCustomRow := isCustom && i == customIdx
-		marker := askRenderMarker(q.kind, isPicked, isCursor)
+		marker := m.markerFor(q.kind, isPicked, isCursor)
 		labelLines := askOptionLabelLines(opt, isCustomRow, ans.custom, isCursor)
 		for j, ln := range labelLines {
 			if j == 0 {
@@ -704,6 +748,16 @@ func diagramExtent(diagrams []string) (w, h int) {
 	return
 }
 
+func (m model) markerFor(k qKind, picked, cursor bool) string {
+	if m.askMode == askForModel && k == qPickOne {
+		if picked {
+			return askOptionSelected.Render("✓")
+		}
+		return " "
+	}
+	return askRenderMarker(k, picked, cursor)
+}
+
 func askRenderMarker(k qKind, picked, cursor bool) string {
 	if k == qPickMany {
 		switch {
@@ -778,6 +832,12 @@ func (m model) renderAskConfirm() string {
 func (m model) renderAskHelp() string {
 	if m.askEditing == askEditNote {
 		return askHelpStyle.Render("typing note · enter save · esc cancel")
+	}
+	if m.askMode == askForModel {
+		if m.cursorOnCustom() {
+			return askHelpStyle.Render("type model · enter select · esc cancel")
+		}
+		return askHelpStyle.Render("↑↓ navigate · enter select · esc cancel")
 	}
 	if m.cursorOnCustom() {
 		return askHelpStyle.Render("type answer · shift+enter newline · enter confirm · ←→ tab · esc cancel")

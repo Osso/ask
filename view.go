@@ -199,7 +199,7 @@ func (m model) View() tea.View {
 		switch {
 		case m.pathPickerActive():
 			box = m.renderPathBox()
-		case len(m.filterSlashCmds()) > 0:
+		case m.historyIdx < 0 && len(m.filterSlashCmds()) > 0:
 			box = m.renderSlashBox()
 		}
 	}
@@ -259,6 +259,23 @@ func (m model) View() tea.View {
 				Min: image.Pt(mX, mY),
 				Max: image.Pt(mX+mW, mY+mH),
 			})
+			if m.askOllamaActive {
+				sub := m.viewAskOllamaConfig()
+				sW := lipgloss.Width(sub)
+				sH := lipgloss.Height(sub)
+				sX := (m.width - sW) / 2
+				sY := (m.height - sH) / 2
+				if sX < 0 {
+					sX = 0
+				}
+				if sY < 0 {
+					sY = 0
+				}
+				uv.NewStyledString(sub).Draw(canvas, image.Rectangle{
+					Min: image.Pt(sX, sY),
+					Max: image.Pt(sX+sW, sY+sH),
+				})
+			}
 			if m.askConfirmingCancel {
 				confirm := m.viewAskCancelConfirm()
 				cW := lipgloss.Width(confirm)

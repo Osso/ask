@@ -14,6 +14,12 @@ type askConfig struct {
 type claudeConfig struct {
 	SlashCommands []claudeSlashEntry `json:"slashCommands,omitempty"`
 	Model         string             `json:"model,omitempty"`
+	Ollama        ollamaConfig       `json:"ollama,omitempty"`
+}
+
+type ollamaConfig struct {
+	Host  string `json:"host,omitempty"`
+	Model string `json:"model,omitempty"`
 }
 
 type uiConfig struct {

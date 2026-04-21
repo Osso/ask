@@ -12,7 +12,7 @@ import (
 
 func (m model) Init() tea.Cmd {
 	debugLog("Init mcpPort=%d", m.mcpPort)
-	return tea.Batch(probeClaudeInitCmd(m.mcpPort, m.skipAllPermissions), cursor.Blink)
+	return tea.Batch(m.probeClaudeInitCmd(), cursor.Blink)
 }
 
 func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
@@ -391,7 +391,7 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	items := m.filterSlashCmds()
-	menuOpen := !m.busy && len(items) > 0
+	menuOpen := !m.busy && m.historyIdx < 0 && len(items) > 0
 	pickOpen := !m.busy && m.pathPickerActive() && len(m.pathMatches) > 0
 
 	if msg.Mod == 0 {
@@ -633,6 +633,7 @@ func (m *model) recordInputHistory(val string) {
 
 func (m *model) resetHistoryNav() {
 	m.historyIdx = -1
+	m.historyDraft = ""
 }
 
 func (m *model) historyPrev() bool {
@@ -640,6 +641,7 @@ func (m *model) historyPrev() bool {
 		return false
 	}
 	if m.historyIdx == -1 {
+		m.historyDraft = m.input.Value()
 		m.historyIdx = len(m.inputHistory) - 1
 	} else if m.historyIdx > 0 {
 		m.historyIdx--
@@ -657,8 +659,15 @@ func (m *model) historyNext() {
 	}
 	m.historyIdx++
 	if m.historyIdx >= len(m.inputHistory) {
-		m.resetHistoryNav()
-		m.input.Reset()
+		draft := m.historyDraft
+		m.historyIdx = -1
+		m.historyDraft = ""
+		if draft != "" {
+			m.input.SetValue(draft)
+			m.input.CursorEnd()
+		} else {
+			m.input.Reset()
+		}
 	} else {
 		m.input.SetValue(m.inputHistory[m.historyIdx])
 		m.input.CursorEnd()

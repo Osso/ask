@@ -21,8 +21,15 @@ const askUserQuestionHookSettings = `{"hooks":{"PreToolUse":[{"matcher":"AskUser
 // MCP tool calls block on the user-question modal; default timeout is too short.
 const mcpTimeoutMillis = "86400000"
 
-func claudeEnv() []string {
-	return append(os.Environ(), "MCP_TIMEOUT="+mcpTimeoutMillis)
+func (m model) claudeEnv() []string {
+	env := append(os.Environ(), "MCP_TIMEOUT="+mcpTimeoutMillis)
+	if strings.EqualFold(m.claudeModel, "ollama") {
+		env = append(env,
+			"ANTHROPIC_BASE_URL="+ollamaBaseURL(m.ollamaHost),
+			"ANTHROPIC_AUTH_TOKEN=ollama",
+		)
+	}
+	return env
 }
 
 func userContent(line string, attachments []pendingAttachment) any {
@@ -122,14 +129,19 @@ func (m *model) ensureProc() error {
 		args = append(args, "--settings", askUserQuestionHookSettings)
 		args = append(args, "--permission-prompt-tool", "mcp__ask__approval_prompt")
 	}
-	if m.claudeModel != "" {
+	switch {
+	case strings.EqualFold(m.claudeModel, "ollama"):
+		if m.ollamaModel != "" {
+			args = append(args, "--model", m.ollamaModel)
+		}
+	case m.claudeModel != "":
 		args = append(args, "--model", m.claudeModel)
 	}
 	if m.sessionID != "" {
 		args = append(args, "--resume", m.sessionID)
 	}
 	cmd := exec.Command("claude", args...)
-	cmd.Env = claudeEnv()
+	cmd.Env = m.claudeEnv()
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -384,7 +396,7 @@ func formatToolStatus(name string, input map[string]any) string {
 	return name
 }
 
-func probeClaudeInitCmd(mcpPort int, skipAllPermissions bool) tea.Cmd {
+func (m model) probeClaudeInitCmd() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
@@ -394,18 +406,26 @@ func probeClaudeInitCmd(mcpPort int, skipAllPermissions bool) tea.Cmd {
 			"--output-format", "stream-json",
 			"--verbose",
 		}
-		if skipAllPermissions {
+		if m.skipAllPermissions {
 			args = append(args, "--dangerously-skip-permissions")
 		}
-		if mcpPort > 0 {
+		if m.mcpPort > 0 {
 			args = append(args,
-				"--mcp-config", fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, mcpPort),
+				"--mcp-config", fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, m.mcpPort),
 				"--settings", askUserQuestionHookSettings,
 			)
 		}
+		switch {
+		case strings.EqualFold(m.claudeModel, "ollama"):
+			if m.ollamaModel != "" {
+				args = append(args, "--model", m.ollamaModel)
+			}
+		case m.claudeModel != "":
+			args = append(args, "--model", m.claudeModel)
+		}
 
 		cmd := exec.CommandContext(ctx, "claude", args...)
-		cmd.Env = claudeEnv()
+		cmd.Env = m.claudeEnv()
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
 			return claudeInitLoadedMsg{err: err}
