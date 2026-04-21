@@ -52,6 +52,7 @@ One `package main`, one file per concern.
 | `session.go`           | Session path helpers, history/session loading from `~/.claude/projects/`. |
 | `commands.go`          | `cd` / `ls` handlers and `ls` formatting.                               |
 | `paths.go`             | Path picker state, tilde expansion, completion.                         |
+| `shell.go`             | Shell-mode execution: `$SHELL -c` fork, stdout/stderr pipe streaming, 100-line cap, cwd capture via `pwd > tmpfile`, pgroup SIGKILL on cancel. |
 | `clipboard.go`         | `wl-paste` integration, returns raw bytes + re-encoded PNG.             |
 | `kitty.go`             | Kitty graphics protocol: detection, transmit over `/dev/tty`, Unicode placeholder rows. |
 | `kitty_diacritics.go`  | The canonical 297-entry Kitty row/column diacritic table.               |
@@ -113,6 +114,16 @@ Plain text → `content: string`. With attachments → `content: []block` using 
 - Placeholders are emitted inside `View()` via `kittyPlaceholderRows(id, cols, rows)`. Rows of `U+10EEEE` + diacritics encode `(row, col)` and the foreground color encodes the low 24 bits of the image ID.
 - `kitty_diacritics.go` is the canonical Kitty lookup table — do not edit entries; if you need more than 297 indices, you've misdesigned the grid.
 
+## Shell mode
+
+- **Activation**: `updateInput` intercepts `msg.Text == "!"` on an empty prompt (not busy, no pending attachments) and flips `m.shellMode`. Subsequent keys route through `updateShellInput` until exit (Esc, Ctrl+C, or two backspaces on empty). On Enter the command is recorded into `m.shellHistory` (separate from `m.inputHistory`), the user text is rendered as a userBar entry, and `startShellCmd` dispatches.
+- **Output pipeline**: `startShellCmd` forks `$SHELL -c '<input>\npwd > <tmpfile>'` with `Setpgid: true`. Two goroutines scan stdout and stderr into a channel as `shellLineMsg`; `nextShellStreamCmd` blocks on the first message then non-blockingly drains up to 500 more (and a trailing `shellDoneMsg`) into a single `shellBatchMsg` so large outputs render in chunks, not line-by-line.
+- **100-line cap**: the two stream goroutines share a `shellStreamState` with an atomic counter and `marked` bool. Past the cap they stop forwarding lines and emit a one-shot `… output truncated at 100 lines` marker via `CompareAndSwap`. The pipe is kept draining so the child doesn't block on a full kernel buffer.
+- **Cwd persistence**: the `pwd > tmpfile` suffix runs after the user's command (newline-separated — works in bash/zsh/fish). The done handler reads the tmpfile, `os.Chdir`s if it differs from the current cwd, then calls `refreshPrompt` and `refreshPathMatches`. Temp file is removed on both success and error paths.
+- **Cancel**: `killShellProc` does `Kill(-pgid, SIGKILL)` so children (`sleep 100`, etc.) die with the wrapper. Do NOT combine `Setpgid: true` with `Setsid: true` on the same `SysProcAttr`: the child's `setpgid(2)` returns EPERM when called on a session leader, so exec fails with `operation not permitted`. This is the trap creack/pty falls into if you try to add PTY support naively.
+- **Popups**: `View()`'s popup gate is `m.mode == modeInput && !m.busy && !m.shellMode`, so the path picker (from `cd `/`ls ` prefix) and slash popover both stay hidden in shell mode even though the input text might still prefix-match.
+- **Curses apps are not supported** — output flows through pipes, so altscreen sequences from vim/htop/less render as raw text in history. Rollback artifact: there was a PTY-based path; removed because `Setpgid + Setsid` collision made non-curses commands fail with EPERM.
+
 ## MCP server
 
 - `newMCPBridge()` binds `127.0.0.1:0`, stores the port, builds the `mcp.Server`, registers `ask_user_question`, then returns.
@@ -132,3 +143,4 @@ Plain text → `content: string`. With attachments → `content: []block` using 
 - `layout()` extra-row math: any change to what appears between viewport and input (chip, thumbnail strip, spacer row) needs the `extra` term in `layout()` and the emission order in `viewBody()` kept in sync.
 - Scrollbar column is drawn over `m.width-1`. If any text-rendering style grows a margin or a user-bar width past `m.width-1`, the scrollbar will be overwritten or vice-versa.
 - `askToolRequestMsg` is rejected if the modal is already open — only one MCP ask at a time. Double-calls from Claude return `cancelled: true` for the second one.
+- `contentFingerprint` must mix in `len(m.history[m.shellOutIdx].text)` whenever a shell output entry is active. The frame cache is keyed on `len(m.history) | m.width`, and shell mode appends streamed lines in place to a single history entry, so without that extra term the cache returns a stale (first-line-only) view until something else (spinner row, window resize) perturbs the key.

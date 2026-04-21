@@ -20,6 +20,7 @@ with a far richer tabbed modal.
 - **Live todo panel** — `TodoWrite` entries render inline as a bordered box with ☐ / ▸ / ✓ markers while the turn is active
 - **Inline diffs** — `Edit` / `Write` / `NotebookEdit` structured patches render as colored unified diffs in history (toggle with `/config`)
 - **Input history** — `↑` / `↓` at the first line of the input walks prior sent messages
+- **Shell mode** — type `!` on an empty prompt to run a command through your `$SHELL`; stdout/stderr stream into history (capped at 100 lines), `cd` persists, `Esc` / `Ctrl+C` / double-backspace exits, `↑` / `↓` walks shell history separately from LLM input history
 - **Image attachments** via clipboard paste
   - `Ctrl+V` on Wayland reads the clipboard with `wl-paste`
   - In Kitty-compatible terminals (Kitty, Ghostty) images render as inline thumbnails using the Kitty graphics protocol with Unicode placeholders
@@ -82,6 +83,32 @@ of the TUI.
 `Tab` on `cd ` or `ls ` triggers path completion against the current
 prefix, same as anywhere else a path is expected.
 
+### Shell mode
+
+Type `!` as the first character of an empty prompt to enter shell
+mode. The `!` is consumed and a **Shell Mode** indicator appears on
+the spinner row. Enter sends the input to your `$SHELL` (falling back
+to `/bin/sh`), and stdout/stderr stream line-by-line into history in
+the same slot LLM responses use. Output is capped at 100 lines per
+command with a `… output truncated at 100 lines` marker; the command
+still runs to completion, and the pipe stays drained so it can't block
+on a full kernel buffer.
+
+`cd` and anything else that changes `$PWD` inside the subshell
+persists into ask's own process after the command returns, so the
+prompt, `/resume`, and path completion all track the new directory.
+
+Exit shell mode with `Esc`, `Ctrl+C` on an empty prompt, or two
+consecutive `Backspace` presses on an empty prompt. While a command is
+running, `Ctrl+C` SIGKILLs the whole process group instead of leaving
+the mode. Shell mode keeps its own `↑` / `↓` history independent of
+the LLM input history, and the `/`-slash popover plus `cd` / `ls` path
+picker are suppressed while active.
+
+Curses / full-screen apps (vim, htop, less, …) are **not supported** —
+output goes through pipes, not a PTY, so their altscreen sequences
+render as raw text in history. Drop to a separate shell for those.
+
 ### Keybindings
 
 | Key                    | Action                                             |
@@ -95,8 +122,9 @@ prefix, same as anywhere else a path is expected.
 | `PgUp` / `PgDn`        | Scroll the viewport half a page                    |
 | Mouse wheel            | Scroll the viewport                                |
 | Mouse click on `│`     | Jump to that position on the scrollbar             |
-| `↑` / `↓`              | Navigate lists (session picker, slash menu, modal); at the first line of an empty/unmodified input they walk prior sent messages |
+| `↑` / `↓`              | Navigate lists (session picker, slash menu, modal); at the first line of an empty/unmodified input they walk prior sent messages. In shell mode they walk the shell-only history. |
 | `Tab`                  | Auto-complete a path or slash command              |
+| `!` (empty prompt)     | Enter [shell mode](#shell-mode)                    |
 
 ### Question modal (via MCP tool)
 
