@@ -139,6 +139,8 @@ func (m *model) ensureProc() error {
 	}
 	if m.sessionID != "" {
 		args = append(args, "--resume", m.sessionID)
+	} else if m.worktree {
+		args = append(args, "--worktree")
 	}
 	cmd := exec.Command("claude", args...)
 	cmd.Env = m.claudeEnv()

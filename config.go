@@ -27,6 +27,7 @@ type uiConfig struct {
 	CursorBlink        *bool  `json:"cursorBlink,omitempty"`
 	RenderDiffs        *bool  `json:"renderDiffs,omitempty"`
 	SkipAllPermissions *bool  `json:"skipAllPermissions,omitempty"`
+	Worktree           *bool  `json:"worktree,omitempty"`
 	Theme              string `json:"theme,omitempty"`
 }
 

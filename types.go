@@ -249,6 +249,7 @@ type model struct {
 	cursorBlink        bool
 	renderDiffs        bool
 	skipAllPermissions bool
+	worktree           bool
 	turnBuffer         []string
 
 	lastContentFP string

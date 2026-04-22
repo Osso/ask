@@ -31,11 +31,16 @@ func (m model) configItemsAll() []configItem {
 	if m.skipAllPermissions {
 		skipPerms = "on"
 	}
+	worktree := "off"
+	if m.worktree {
+		worktree = "on"
+	}
 	return []configItem{
 		{"Quiet Mode", quiet, "quiet"},
 		{"Cursor Blink", blink, "cursorBlink"},
 		{"Render Diffs", diffs, "renderDiffs"},
 		{"Skip All Permissions", skipPerms, "skipAllPermissions"},
+		{"Worktree", worktree, "worktree"},
 		{"Theme", m.themeName, "theme"},
 	}
 }
@@ -140,6 +145,16 @@ func (m model) updateConfigModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				v := m.skipAllPermissions
 				cfg, _ := loadConfig()
 				cfg.UI.SkipAllPermissions = &v
+				if err := saveConfig(cfg); err != nil {
+					debugLog("saveConfig err: %v", err)
+				}
+				m.killProc()
+				return m, nil
+			case "worktree":
+				m.worktree = !m.worktree
+				v := m.worktree
+				cfg, _ := loadConfig()
+				cfg.UI.Worktree = &v
 				if err := saveConfig(cfg); err != nil {
 					debugLog("saveConfig err: %v", err)
 				}

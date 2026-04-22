@@ -86,6 +86,7 @@ func initialModel(cfg askConfig) model {
 		cursorBlink:        cursorBlink,
 		renderDiffs:        cfg.UI.RenderDiffs == nil || *cfg.UI.RenderDiffs,
 		skipAllPermissions: cfg.UI.SkipAllPermissions != nil && *cfg.UI.SkipAllPermissions,
+		worktree:           cfg.UI.Worktree != nil && *cfg.UI.Worktree,
 		historyIdx:         -1,
 		shellOutIdx:        -1,
 		shellHistoryIdx:    -1,
