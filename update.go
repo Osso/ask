@@ -879,6 +879,9 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	case "/model":
 		m = m.startModelPicker()
 		return m, nil
+	case "/effort":
+		m = m.startEffortPicker()
+		return m, nil
 	case "/config":
 		m = m.startConfigModal()
 		return m, nil

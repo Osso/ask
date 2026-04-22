@@ -155,6 +155,63 @@ func (m model) applyModelPick() (model, tea.Cmd) {
 	return m, nil
 }
 
+var effortOptions = []string{"default", "low", "medium", "high", "xhigh", "max"}
+
+func (m model) startEffortPicker() model {
+	m = m.startAsk([]question{{
+		kind:     qPickOne,
+		prompt:   "Select Claude reasoning effort",
+		options:  effortOptions,
+		diagrams: make([]string, len(effortOptions)),
+	}})
+	m.askMode = askForEffort
+
+	selected := 0
+	for i, opt := range effortOptions {
+		if strings.EqualFold(opt, m.claudeEffort) {
+			selected = i
+			break
+		}
+	}
+	m.askAnswers[0].picks[selected] = true
+	m.askCursor = selected
+	return m
+}
+
+func (m model) applyEffortPick() (model, tea.Cmd) {
+	var picked string
+	if len(m.askQuestions) > 0 && len(m.askAnswers) > 0 {
+		q := m.askQuestions[0]
+		ans := m.askAnswers[0]
+		for idx := range ans.picks {
+			if idx >= 0 && idx < len(q.options) {
+				picked = q.options[idx]
+			}
+			break
+		}
+	}
+	if strings.EqualFold(picked, "default") {
+		picked = ""
+	}
+	m = m.clearAsk()
+	if picked == m.claudeEffort {
+		return m, nil
+	}
+	m.killProc()
+	m.claudeEffort = picked
+	cfg, _ := loadConfig()
+	cfg.Claude.Effort = picked
+	if err := saveConfig(cfg); err != nil {
+		debugLog("saveConfig err: %v", err)
+	}
+	msg := "✓ effort cleared (using claude default)"
+	if picked != "" {
+		msg = "✓ effort set to " + picked
+	}
+	m.appendHistory(outputStyle.Render(promptStyle.Render(msg)))
+	return m, nil
+}
+
 func (m model) isCustomOption(tab int) bool {
 	if tab < 0 || tab >= len(m.askQuestions) {
 		return false
@@ -168,6 +225,10 @@ func (m model) isCustomOption(tab int) bool {
 
 func (m model) isOnConfirmTab() bool {
 	return m.askTab == len(m.askQuestions)
+}
+
+func (m model) isSinglePicker() bool {
+	return m.askMode == askForModel || m.askMode == askForEffort
 }
 
 func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -233,7 +294,7 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.clearAsk(), nil
 
 	case msg.Code == tea.KeyTab && msg.Mod&tea.ModShift != 0, msg.Code == tea.KeyLeft:
-		if m.askMode == askForModel {
+		if m.isSinglePicker() {
 			return m, nil
 		}
 		m.askTab--
@@ -244,7 +305,7 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case msg.Code == tea.KeyTab, msg.Code == tea.KeyRight:
-		if m.askMode == askForModel {
+		if m.isSinglePicker() {
 			return m, nil
 		}
 		m.askTab++
@@ -300,7 +361,7 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			ans.picks = map[int]bool{m.askCursor: true}
 		}
 		m = m.advanceAskTab()
-		if m.askMode == askForModel && m.isOnConfirmTab() {
+		if m.isSinglePicker() && m.isOnConfirmTab() {
 			return m.submitAsk()
 		}
 		return m, nil
@@ -438,6 +499,9 @@ func (m model) submitAsk() (model, tea.Cmd) {
 	if m.askMode == askForModel {
 		return m.applyModelPick()
 	}
+	if m.askMode == askForEffort {
+		return m.applyEffortPick()
+	}
 	if m.askReply != nil {
 		m.askReply <- askReply{answers: m.askAnswers}
 		m.status = "thinking…"
@@ -507,7 +571,7 @@ func (m model) viewAsk() string {
 	}
 	help := m.renderAskHelp()
 	var body string
-	if m.askMode == askForModel {
+	if m.isSinglePicker() {
 		body = strings.Join([]string{content, "", help}, "\n")
 	} else {
 		body = strings.Join([]string{m.renderAskTabs(), "", content, "", help}, "\n")
@@ -724,7 +788,7 @@ func diagramExtent(diagrams []string) (w, h int) {
 }
 
 func (m model) markerFor(k qKind, picked, cursor bool) string {
-	if m.askMode == askForModel && k == qPickOne {
+	if m.isSinglePicker() && k == qPickOne {
 		if picked {
 			return askOptionSelected.Render("✓")
 		}
@@ -808,7 +872,7 @@ func (m model) renderAskHelp() string {
 	if m.askEditing == askEditNote {
 		return askHelpStyle.Render("typing note · enter save · esc cancel")
 	}
-	if m.askMode == askForModel {
+	if m.isSinglePicker() {
 		if m.cursorOnCustom() {
 			return askHelpStyle.Render("type model · enter select · esc cancel")
 		}

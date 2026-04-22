@@ -14,6 +14,7 @@ type askConfig struct {
 type claudeConfig struct {
 	SlashCommands []claudeSlashEntry `json:"slashCommands,omitempty"`
 	Model         string             `json:"model,omitempty"`
+	Effort        string             `json:"effort,omitempty"`
 	Ollama        ollamaConfig       `json:"ollama,omitempty"`
 }
 

@@ -90,6 +90,7 @@ func newTab(id int, cfg askConfig) (*model, error) {
 		height:             30,
 		claudeSlashCmds:    cfg.Claude.SlashCommands,
 		claudeModel:        cfg.Claude.Model,
+		claudeEffort:       cfg.Claude.Effort,
 		ollamaHost:         cfg.Claude.Ollama.Host,
 		ollamaModel:        cfg.Claude.Ollama.Model,
 		themeName:          themeName,

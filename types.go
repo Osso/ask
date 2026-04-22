@@ -31,6 +31,7 @@ var builtinSlashCmds = []slashCmd{
 	{"/new", "start a new Claude session"},
 	{"/clear", "start a new Claude session"},
 	{"/model", "select the Claude model"},
+	{"/effort", "select the Claude reasoning effort"},
 	{"/config", "configure ask"},
 }
 
@@ -287,6 +288,7 @@ type model struct {
 
 	mcpPort         int
 	claudeModel     string
+	claudeEffort    string
 	ollamaHost      string
 	ollamaModel     string
 	claudeSlashCmds []claudeSlashEntry
@@ -307,6 +309,7 @@ type askMode int
 const (
 	askForMCP askMode = iota
 	askForModel
+	askForEffort
 )
 
 type pendingAttachment struct {

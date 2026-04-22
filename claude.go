@@ -137,6 +137,9 @@ func (m *model) ensureProc() error {
 	case m.claudeModel != "":
 		args = append(args, "--model", m.claudeModel)
 	}
+	if m.claudeEffort != "" {
+		args = append(args, "--effort", m.claudeEffort)
+	}
 	if m.sessionID != "" {
 		args = append(args, "--resume", m.sessionID)
 	} else if m.worktree && inGitCheckout() {
@@ -497,6 +500,9 @@ func (m model) probeClaudeInitCmd() tea.Cmd {
 			}
 		case m.claudeModel != "":
 			args = append(args, "--model", m.claudeModel)
+		}
+		if m.claudeEffort != "" {
+			args = append(args, "--effort", m.claudeEffort)
 		}
 
 		cmd := exec.CommandContext(ctx, "claude", args...)
