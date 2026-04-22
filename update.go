@@ -823,13 +823,14 @@ func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if len(m.sessions) > 0 {
 			m.killProc()
-			sid := m.sessions[m.pickerIdx].id
-			m.sessionID = sid
+			entry := m.sessions[m.pickerIdx]
+			m.sessionID = entry.id
+			m.resumeCwd = entry.cwd
 			m.mode = modeInput
 			m.history = nil
 			m.appendHistory(outputStyle.Render(dimStyle.Render(
-				fmt.Sprintf("loading session %s…", short(sid)))))
-			return m, loadHistoryCmd(sid, m.renderDiffs, m.quietMode, false)
+				fmt.Sprintf("loading session %s…", short(entry.id)))))
+			return m, loadHistoryCmd(entry.id, m.renderDiffs, m.quietMode, false)
 		}
 	}
 	return m, nil
@@ -843,6 +844,7 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	case "/new", "/clear":
 		m.killProc()
 		m.sessionID = ""
+		m.resumeCwd = ""
 		m.history = nil
 		m.appendHistory(outputStyle.Render(promptStyle.Render("✓ new session")))
 		return m, nil

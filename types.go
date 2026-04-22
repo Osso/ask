@@ -36,6 +36,7 @@ var builtinSlashCmds = []slashCmd{
 
 type sessionEntry struct {
 	id      string
+	cwd     string
 	preview string
 	modTime time.Time
 }
@@ -192,6 +193,7 @@ type model struct {
 	spinner   spinner.Model
 	renderer  *glamour.TermRenderer
 	sessionID string
+	resumeCwd string
 	busy      bool
 	width     int
 	height    int

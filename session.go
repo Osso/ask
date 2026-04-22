@@ -11,6 +11,15 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// sessionDir pairs a claude project directory (`~/.claude/projects/<encoded>`)
+// with the filesystem cwd that produced it. The cwd is what we pass to
+// `exec.Cmd.Dir` on `claude --resume` so claude's own cwd→project-dir mapping
+// lands on the right sibling.
+type sessionDir struct {
+	dir string
+	cwd string
+}
+
 func sessionPath(sessionID string) (string, error) {
 	dirs, err := candidateSessionDirs()
 	if err != nil {
@@ -18,12 +27,12 @@ func sessionPath(sessionID string) (string, error) {
 	}
 	file := sessionID + ".jsonl"
 	for _, d := range dirs {
-		p := filepath.Join(d, file)
+		p := filepath.Join(d.dir, file)
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
 	}
-	return filepath.Join(dirs[0], file), nil
+	return filepath.Join(dirs[0].dir, file), nil
 }
 
 // candidateSessionDirs returns the `~/.claude/projects/<encoded>` directory
@@ -35,8 +44,9 @@ func sessionPath(sessionID string) (string, error) {
 // Claude encodes project cwd as `ReplaceAll(cwd, "/", "-")` for path
 // segments without dots, but replaces `.` with `-` too — so
 // `/foo/ask/.claude/worktrees/bar` becomes `-foo-ask--claude-worktrees-bar`.
-// We rely on that literal prefix to find siblings.
-func candidateSessionDirs() ([]string, error) {
+// We rely on that literal prefix to find siblings and reconstruct the
+// worktree path from the remainder.
+func candidateSessionDirs() ([]sessionDir, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -47,7 +57,7 @@ func candidateSessionDirs() ([]string, error) {
 	}
 	base := filepath.Join(home, ".claude", "projects")
 	mainName := strings.ReplaceAll(cwd, "/", "-")
-	dirs := []string{filepath.Join(base, mainName)}
+	dirs := []sessionDir{{dir: filepath.Join(base, mainName), cwd: cwd}}
 	prefix := mainName + "--claude-worktrees-"
 	entries, err := os.ReadDir(base)
 	if err != nil {
@@ -60,7 +70,11 @@ func candidateSessionDirs() ([]string, error) {
 		if !strings.HasPrefix(e.Name(), prefix) {
 			continue
 		}
-		dirs = append(dirs, filepath.Join(base, e.Name()))
+		wtName := strings.TrimPrefix(e.Name(), prefix)
+		dirs = append(dirs, sessionDir{
+			dir: filepath.Join(base, e.Name()),
+			cwd: filepath.Join(cwd, ".claude", "worktrees", wtName),
+		})
 	}
 	return dirs, nil
 }
@@ -164,8 +178,8 @@ func loadSessionsCmd() tea.Cmd {
 		var sessions []sessionEntry
 		seen := make(map[string]struct{})
 		var firstErr error
-		for _, dir := range dirs {
-			entries, err := os.ReadDir(dir)
+		for _, sd := range dirs {
+			entries, err := os.ReadDir(sd.dir)
 			if err != nil {
 				if firstErr == nil && !os.IsNotExist(err) {
 					firstErr = err
@@ -184,10 +198,11 @@ func loadSessionsCmd() tea.Cmd {
 				if err != nil {
 					continue
 				}
-				full := filepath.Join(dir, e.Name())
+				full := filepath.Join(sd.dir, e.Name())
 				seen[id] = struct{}{}
 				sessions = append(sessions, sessionEntry{
 					id:      id,
+					cwd:     sd.cwd,
 					preview: readSessionPreview(full),
 					modTime: info.ModTime(),
 				})

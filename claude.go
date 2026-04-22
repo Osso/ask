@@ -146,6 +146,13 @@ func (m *model) ensureProc() error {
 	}
 	cmd := exec.Command("claude", args...)
 	cmd.Env = m.claudeEnv()
+	// When resuming a worktree session, the jsonl lives under
+	// `~/.claude/projects/<main-encoded>--claude-worktrees-<name>/` — claude
+	// looks it up via its own cwd, so the subprocess has to run inside that
+	// worktree for `--resume` to find the file.
+	if m.sessionID != "" && m.resumeCwd != "" {
+		cmd.Dir = m.resumeCwd
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
