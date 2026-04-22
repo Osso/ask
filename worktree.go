@@ -6,8 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 )
+
+// askLockPrefix tags worktree locks ask owns. The suffix is the ask PID so
+// prune can tell its own / other live / stale locks apart.
+const askLockPrefix = "ask:"
 
 // ensureWorktreeGitignore makes sure the git checkout at cwd ignores
 // `.claude/worktrees/`, the parent of every worktree `claude --worktree`
@@ -71,6 +77,10 @@ func worktreeNameFromCwd(cwd string) string {
 // drop uncommitted / unmerged work, so this cannot lose changes. No-op
 // outside a cwd-level git checkout, and never runs when ask itself is
 // launched inside one of those worktrees.
+//
+// Lock-aware: a worktree held by another running ask (`ask:<live-pid>`) is
+// skipped; a stale `ask:<dead-pid>` lock or our own PID's lock is unlocked
+// and then removed; a non-ask lock is left alone.
 func pruneWorktrees() {
 	if !inGitCheckout() {
 		return
@@ -89,11 +99,29 @@ func pruneWorktrees() {
 		}
 		return
 	}
+	locks := worktreeLocks(cwd)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		path := filepath.Join(cwd, ".claude", "worktrees", e.Name())
+		if reason, locked := locks[path]; locked {
+			if !lockIsAskFormat(reason) {
+				debugLog("worktree skip %s: foreign lock %q", path, reason)
+				continue
+			}
+			if lockHeldByLiveOtherAsk(reason) {
+				debugLog("worktree skip %s: live ask %q", path, reason)
+				continue
+			}
+			ul := exec.Command("git", "worktree", "unlock", path)
+			ul.Dir = cwd
+			if out, err := ul.CombinedOutput(); err != nil {
+				debugLog("worktree unlock %s: %v (%s)", path, err, bytes.TrimSpace(out))
+				continue
+			}
+			debugLog("worktree unlocked stale %s reason=%q", path, reason)
+		}
 		rm := exec.Command("git", "worktree", "remove", path)
 		rm.Dir = cwd
 		if out, err := rm.CombinedOutput(); err != nil {
@@ -110,6 +138,97 @@ func pruneWorktrees() {
 		}
 		debugLog("branch deleted %s", branch)
 	}
+}
+
+// lockWorktree tags `.claude/worktrees/<name>` with `ask:<pid>` so other ask
+// instances pruning on startup / shutdown see it's owned and skip it.
+// Best-effort: a relock attempt on an already-locked worktree fails harmlessly
+// (git leaves the existing lock intact), which is fine — the existing lock is
+// still ours from earlier in this ask's life.
+func lockWorktree(name string) {
+	if name == "" || !inGitCheckout() {
+		return
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	path := filepath.Join(cwd, ".claude", "worktrees", name)
+	reason := fmt.Sprintf("%s%d", askLockPrefix, os.Getpid())
+	cmd := exec.Command("git", "worktree", "lock", "--reason", reason, path)
+	cmd.Dir = cwd
+	if out, err := cmd.CombinedOutput(); err != nil {
+		debugLog("worktree lock %s: %v (%s)", path, err, bytes.TrimSpace(out))
+		return
+	}
+	debugLog("worktree locked %s reason=%s", path, reason)
+}
+
+// worktreeLocks returns absolute path → lock reason for every locked worktree
+// git knows about. Unlocked entries are omitted. Reason is the empty string
+// when the lock carries no message.
+func worktreeLocks(cwd string) map[string]string {
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd.Dir = cwd
+	out, err := cmd.Output()
+	if err != nil {
+		debugLog("worktree list: %v", err)
+		return nil
+	}
+	locks := map[string]string{}
+	var curPath, reason string
+	var locked bool
+	flush := func() {
+		if curPath != "" && locked {
+			locks[curPath] = reason
+		}
+		curPath, reason, locked = "", "", false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			flush()
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			flush()
+			curPath = strings.TrimPrefix(line, "worktree ")
+		case line == "locked":
+			locked = true
+		case strings.HasPrefix(line, "locked "):
+			locked = true
+			reason = strings.TrimPrefix(line, "locked ")
+		}
+	}
+	flush()
+	return locks
+}
+
+// lockIsAskFormat reports whether reason looks like `ask:<int>` regardless
+// of whether that PID is alive.
+func lockIsAskFormat(reason string) bool {
+	if !strings.HasPrefix(reason, askLockPrefix) {
+		return false
+	}
+	_, err := strconv.Atoi(strings.TrimPrefix(reason, askLockPrefix))
+	return err == nil
+}
+
+// lockHeldByLiveOtherAsk returns true when reason is `ask:<pid>` with a
+// non-self PID that is currently running. Our own PID returns false so the
+// shutdown prune can reap the worktrees we just locked during this session.
+func lockHeldByLiveOtherAsk(reason string) bool {
+	if !strings.HasPrefix(reason, askLockPrefix) {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimPrefix(reason, askLockPrefix))
+	if err != nil || pid <= 0 {
+		return false
+	}
+	if pid == os.Getpid() {
+		return false
+	}
+	return syscall.Kill(pid, 0) == nil
 }
 
 // ensureResumeWorktree recreates a `.claude/worktrees/<name>` directory that

@@ -81,7 +81,11 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		if msg.proc != m.proc {
 			return m, nil
 		}
-		m.worktreeName = worktreeNameFromCwd(msg.cwd)
+		name := worktreeNameFromCwd(msg.cwd)
+		if name != "" && name != m.worktreeName {
+			lockWorktree(name)
+		}
+		m.worktreeName = name
 		m.lastContentFP = ""
 		if m.streamCh != nil {
 			return m, nextStreamCmd(m.streamCh)
