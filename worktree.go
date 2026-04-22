@@ -47,6 +47,21 @@ func inGitCheckout() bool {
 	return err == nil
 }
 
+// worktreeNameFromCwd returns the worktree directory name when cwd is inside
+// a `.claude/worktrees/<name>/...` subtree, otherwise "".
+func worktreeNameFromCwd(cwd string) string {
+	sep := string(os.PathSeparator)
+	marker := sep + ".claude" + sep + "worktrees" + sep
+	_, rest, ok := strings.Cut(cwd, marker)
+	if !ok {
+		return ""
+	}
+	if name, _, ok := strings.Cut(rest, sep); ok {
+		return name
+	}
+	return rest
+}
+
 func gitignoreCoversWorktrees(contents string) bool {
 	for _, raw := range strings.Split(contents, "\n") {
 		l := strings.TrimSpace(raw)

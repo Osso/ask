@@ -92,6 +92,11 @@ type todoUpdatedMsg struct {
 	proc  *claudeProc
 }
 
+type claudeCwdMsg struct {
+	cwd  string
+	proc *claudeProc
+}
+
 type diffHunk struct {
 	oldStart int
 	oldLines int
@@ -261,6 +266,7 @@ type model struct {
 	renderDiffs        bool
 	skipAllPermissions bool
 	worktree           bool
+	worktreeName       string
 	turnBuffer         []string
 
 	lastContentFP string

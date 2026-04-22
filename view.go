@@ -120,7 +120,7 @@ func buildGlamourStyle(t theme) ansi.StyleConfig {
 func (m *model) layout() {
 	atBottom := m.viewport.AtBottom()
 	inputH := m.input.Height()
-	extra := m.pendingBlockHeight() + m.todoBlockHeight() + m.spinnerBlockHeight()
+	extra := m.pendingBlockHeight() + m.todoBlockHeight() + m.spinnerBlockHeight() + m.worktreeChipHeight()
 	vpH := m.height - 1 - inputH - extra
 	if vpH < 1 {
 		vpH = 1
@@ -672,6 +672,10 @@ func (m model) viewBody() string {
 	if debugOn {
 		debugTrace("    vb.spinner", ss)
 	}
+	if chip := m.worktreeChip(); chip != "" {
+		b.WriteString(chip)
+		b.WriteString("\n")
+	}
 	is := time.Now()
 	b.WriteString(m.input.View())
 	if debugOn {
@@ -728,6 +732,20 @@ func renderTodoLine(t todoItem) string {
 	default:
 		return todoPendingStyle.Render("☐ " + t.Content)
 	}
+}
+
+func (m model) worktreeChip() string {
+	if m.worktreeName == "" {
+		return ""
+	}
+	return "   " + dimStyle.Render("[🌳 "+m.worktreeName+"]")
+}
+
+func (m model) worktreeChipHeight() int {
+	if m.worktreeName == "" {
+		return 0
+	}
+	return 1
 }
 
 func (m model) pendingBlockHeight() int {

@@ -77,6 +77,17 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		}
 		return m, nil
 
+	case claudeCwdMsg:
+		if msg.proc != m.proc {
+			return m, nil
+		}
+		m.worktreeName = worktreeNameFromCwd(msg.cwd)
+		m.lastContentFP = ""
+		if m.streamCh != nil {
+			return m, nextStreamCmd(m.streamCh)
+		}
+		return m, nil
+
 	case toolDiffMsg:
 		if msg.proc != m.proc {
 			return m, nil
@@ -113,6 +124,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		m.todos = nil
 		m.streamCh = nil
 		m.proc = nil
+		m.worktreeName = ""
 		m.dismissCancelTurnConfirmIfIdle()
 		if m.mode == modeApproval {
 			m = m.clearApproval()

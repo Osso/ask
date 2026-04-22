@@ -230,6 +230,12 @@ func readClaudeStream(stdout io.Reader, proc *claudeProc, ch chan tea.Msg) {
 			continue
 		}
 		switch t, _ := ev["type"].(string); t {
+		case "system":
+			if subtype, _ := ev["subtype"].(string); subtype == "init" {
+				if cwd, _ := ev["cwd"].(string); cwd != "" {
+					ch <- claudeCwdMsg{cwd: cwd, proc: proc}
+				}
+			}
 		case "assistant":
 			if status := assistantStatus(ev); status != "" {
 				ch <- streamStatusMsg{status: status, proc: proc}
