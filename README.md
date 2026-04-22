@@ -11,7 +11,7 @@ with a far richer tabbed modal.
 ## Features
 
 - **Chat with Claude Code** via streaming JSON input/output
-- **Tabs** — `Ctrl+T` opens a new tab with its own claude subprocess, shell, MCP bridge, history, session, and cwd; `Ctrl+←` / `Ctrl+→` cycle between tabs; a byobu-style strip at the bottom shows each tab's shortened cwd (prefixed with `▸` when that tab is busy); closing the last tab quits
+- **[Tabs](#tabs)** — `Ctrl+T` opens a new tab with its own claude subprocess, shell, MCP bridge, history, session, and cwd; `Ctrl+←` / `Ctrl+→` cycle between tabs; a byobu-style strip at the bottom shows each tab's shortened cwd (prefixed with `▸` when that tab is busy); closing the last tab quits
 - **Resume sessions** — `/resume` opens a picker of prior conversations in the current directory
 - **Pick the Claude model** — `/model` opens a picker (default / haiku / sonnet / opus / custom) and persists the choice
 - **Configurable UI** — `/config` toggles quiet mode, cursor blink, inline diff rendering, and skip-all-permissions; persisted to `~/.config/ask/ask.json`
@@ -83,6 +83,39 @@ of the TUI.
 
 `Tab` on `cd ` or `ls ` triggers path completion against the current
 prefix, same as anywhere else a path is expected.
+
+### Tabs
+
+`Ctrl+T` opens a new tab. Each tab is its own sandbox: a separate
+`claude` subprocess, shell subprocess, MCP bridge (with its own
+localhost port), history, session id, viewport scroll position,
+pending attachments, and working directory. Nothing about one tab
+leaks into another — stopping a turn, pasting an image, running a
+shell command, or typing `cd` only affects the active tab.
+
+A new tab inherits the active tab's cwd at spawn time; after that the
+two cwds are independent. When you switch tabs (`Ctrl+←` / `Ctrl+→`,
+wraps), `ask` also `chdir`s the process so anything that reads
+`os.Getwd` — `/resume`, path completion, the prompt — sees that tab's
+directory.
+
+A byobu-style strip appears at the bottom of the screen whenever more
+than one tab is open. It shows each tab's shortened cwd; the active
+tab is highlighted, and busy tabs (turn streaming, shell command
+running) get a leading `▸` so you can see background work at a glance.
+If the bar runs out of width the overflow tabs collapse into a
+trailing `…`.
+
+MCP calls (`ask_user_question`, `approval_prompt`) are routed to the
+tab that spawned them, not the active one. When a request arrives for
+a background tab, `ask` switches focus to it automatically so the
+modal is visible. If a tab is closed while an MCP call is still
+pending, the reply is auto-cancelled so the blocked tool call on the
+claude side unwinds cleanly.
+
+`Ctrl+D`, or a second `Ctrl+C` on an empty idle prompt, closes the
+current tab (killing its claude, its shell, and stopping its MCP
+bridge). Closing the last tab quits `ask`.
 
 ### Shell mode
 
