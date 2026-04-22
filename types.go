@@ -98,6 +98,16 @@ type claudeCwdMsg struct {
 	proc *claudeProc
 }
 
+type bgTaskStartedMsg struct {
+	taskID string
+	proc   *claudeProc
+}
+
+type bgTaskEndedMsg struct {
+	taskID string
+	proc   *claudeProc
+}
+
 type diffHunk struct {
 	oldStart int
 	oldLines int
@@ -288,6 +298,8 @@ type model struct {
 	exitArmed bool
 
 	todos []todoItem
+
+	bgTasks map[string]struct{}
 }
 
 type askMode int

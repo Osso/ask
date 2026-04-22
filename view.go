@@ -735,14 +735,25 @@ func renderTodoLine(t todoItem) string {
 }
 
 func (m model) worktreeChip() string {
-	if m.worktreeName == "" {
+	var parts []string
+	if m.worktreeName != "" {
+		parts = append(parts, "[🌳 "+m.worktreeName+"]")
+	}
+	if n := len(m.bgTasks); n > 0 {
+		label := "worker"
+		if n != 1 {
+			label = "workers"
+		}
+		parts = append(parts, fmt.Sprintf("[%d background %s active]", n, label))
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return "   " + dimStyle.Render("[🌳 "+m.worktreeName+"]")
+	return "   " + dimStyle.Render(strings.Join(parts, "  "))
 }
 
 func (m model) worktreeChipHeight() int {
-	if m.worktreeName == "" {
+	if m.worktreeName == "" && len(m.bgTasks) == 0 {
 		return 0
 	}
 	return 1

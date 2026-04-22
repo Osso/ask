@@ -88,6 +88,29 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		}
 		return m, nil
 
+	case bgTaskStartedMsg:
+		if msg.proc != m.proc {
+			return m, nil
+		}
+		if m.bgTasks == nil {
+			m.bgTasks = map[string]struct{}{}
+		}
+		m.bgTasks[msg.taskID] = struct{}{}
+		if m.streamCh != nil {
+			return m, nextStreamCmd(m.streamCh)
+		}
+		return m, nil
+
+	case bgTaskEndedMsg:
+		if msg.proc != m.proc {
+			return m, nil
+		}
+		delete(m.bgTasks, msg.taskID)
+		if m.streamCh != nil {
+			return m, nextStreamCmd(m.streamCh)
+		}
+		return m, nil
+
 	case toolDiffMsg:
 		if msg.proc != m.proc {
 			return m, nil
@@ -122,6 +145,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		m.busy = false
 		m.status = ""
 		m.todos = nil
+		m.bgTasks = nil
 		m.streamCh = nil
 		m.proc = nil
 		m.worktreeName = ""

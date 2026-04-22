@@ -207,6 +207,7 @@ func (m *model) killProc() {
 	m.busy = false
 	m.status = ""
 	m.todos = nil
+	m.bgTasks = nil
 }
 
 // drainPendingReplies unblocks any MCP tool call that was waiting on this
@@ -241,9 +242,24 @@ func readClaudeStream(stdout io.Reader, proc *claudeProc, ch chan tea.Msg) {
 		}
 		switch t, _ := ev["type"].(string); t {
 		case "system":
-			if subtype, _ := ev["subtype"].(string); subtype == "init" {
+			subtype, _ := ev["subtype"].(string)
+			switch subtype {
+			case "init":
 				if cwd, _ := ev["cwd"].(string); cwd != "" {
 					ch <- claudeCwdMsg{cwd: cwd, proc: proc}
+				}
+			case "task_started":
+				if tt, _ := ev["task_type"].(string); tt == "background" {
+					if id, _ := ev["task_id"].(string); id != "" {
+						ch <- bgTaskStartedMsg{taskID: id, proc: proc}
+					}
+				}
+			case "task_notification":
+				switch status, _ := ev["status"].(string); status {
+				case "completed", "failed", "stopped":
+					if id, _ := ev["task_id"].(string); id != "" {
+						ch <- bgTaskEndedMsg{taskID: id, proc: proc}
+					}
 				}
 			}
 		case "assistant":
