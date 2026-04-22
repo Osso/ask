@@ -139,7 +139,9 @@ func (m *model) ensureProc() error {
 	}
 	if m.sessionID != "" {
 		args = append(args, "--resume", m.sessionID)
-	} else if m.worktree {
+	} else if m.worktree && inGitCheckout() {
+		// claude refuses to start with --worktree outside a git checkout,
+		// so drop the flag silently in that case.
 		args = append(args, "--worktree")
 	}
 	cmd := exec.Command("claude", args...)

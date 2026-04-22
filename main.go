@@ -104,6 +104,9 @@ func main() {
 	}
 	cfg, _ := loadConfig()
 	_ = saveConfig(cfg)
+	if cfg.UI.Worktree != nil && *cfg.UI.Worktree {
+		ensureWorktreeGitignore()
+	}
 	m := initialModel(cfg)
 	m.mcpPort = bridge.port
 	p := tea.NewProgram(m, tea.WithFPS(120))

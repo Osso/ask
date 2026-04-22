@@ -158,6 +158,9 @@ func (m model) updateConfigModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				if err := saveConfig(cfg); err != nil {
 					debugLog("saveConfig err: %v", err)
 				}
+				if m.worktree {
+					ensureWorktreeGitignore()
+				}
 				m.killProc()
 				return m, nil
 			case "theme":

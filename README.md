@@ -151,7 +151,7 @@ closes the modal.
 | Cursor Blink         | on      | Blinking input cursor at a 650ms cadence. Off keeps a steady cursor.                         |
 | Render Diffs         | on      | Render `Edit` / `Write` / `NotebookEdit` structured patches as inline colored diffs. Off suppresses the diff block (the edit still happens). |
 | Skip All Permissions | off     | Pass `--dangerously-skip-permissions` to the `claude` subprocess so every tool call bypasses the approval modal. Toggling kills the running subprocess; the next send respawns with the new flag state. |
-| Worktree             | off     | Pass `--worktree` to fresh `claude` invocations so the session runs inside an isolated git worktree. Not passed on `--resume` (resume handles it internally) and not passed to the one-off init probe that caches slash commands. Toggling kills the running subprocess; the next send respawns with the new flag state. |
+| Worktree             | off     | Pass `--worktree` to fresh `claude` invocations so the session runs inside an isolated git worktree. Not passed on `--resume` (resume handles it internally) and not passed to the one-off init probe that caches slash commands. Silently dropped outside a git checkout (claude refuses to start with `--worktree` in that case). Toggling kills the running subprocess; the next send respawns with the new flag state. As an opinionated safety check, enabling this (via toggle or by starting with it already on in the config file) also appends `.claude/worktrees/` to the repo's `.gitignore` if no existing rule already covers that path. No-op outside a git checkout. |
 
 Other fields the config file stores automatically:
 
