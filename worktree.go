@@ -233,23 +233,24 @@ func lockHeldByLiveOtherAsk(reason string) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
-// createWorktree creates a fresh `.claude/worktrees/ask-<provider>-<id>`
-// directory and matching `worktree-<name>` branch, then locks the
-// worktree as ours. The `<provider>` tag in the name records which
-// backend spawned the worktree; subsequent provider swaps reuse the
-// same directory (per the shared-worktree design), so the tag is
-// informational only. Returns the absolute path for the subprocess to
-// run in and the display name for the chip.
+// createWorktree creates a fresh
+// `.claude/worktrees/<adjective>-<verb>-<noun>` directory and matching
+// `worktree-<name>` branch, then locks the worktree as ours. Provider
+// identity isn't encoded in the name — worktrees are shared across
+// provider swaps inside a tab, and pruneWorktrees keys on the
+// `ask:<pid>` lock reason rather than the directory name. Returns the
+// absolute path for the subprocess to run in and the display name for
+// the chip.
 //
 // No-op when we're not inside a git checkout; the caller is expected
 // to guard on inGitCheckout() before calling. Errors surface git's
 // combined stderr when `git worktree add` fails (e.g., dirty tree).
-func createWorktree(providerID string) (path, name string, err error) {
+func createWorktree() (path, name string, err error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", "", err
 	}
-	name = newWorktreeName(cwd, providerID)
+	name = newWorktreeName(cwd)
 	path = worktreePath(cwd, name)
 	if err := os.MkdirAll(filepath.Join(cwd, ".claude", "worktrees"), 0o755); err != nil {
 		return "", "", fmt.Errorf("prepare worktrees dir: %w", err)
@@ -278,23 +279,22 @@ func worktreePath(cwd, name string) string {
 	return filepath.Join(cwd, ".claude", "worktrees", name)
 }
 
-// newWorktreeName returns a fresh worktree directory name:
-// `ask-<providerID>-<adjective>-<verb>-<noun>`. Words are drawn
-// uniformly from the curated lists in worktree_words.go (125,000
-// combinations). A stat-based collision check retries the triple if
-// the directory happens to exist; after eight draws we fall back to
-// the same triple plus a 6-char alphanumeric tail so the function
-// can't spin forever even in pathological repos.
-func newWorktreeName(cwd, providerID string) string {
-	pid := sanitizeProviderSegment(providerID)
+// newWorktreeName returns a fresh worktree directory name as an
+// `<adjective>-<verb>-<noun>` triple drawn uniformly from the curated
+// lists in worktree_words.go (125,000 combinations). A stat-based
+// collision check retries the triple if the directory happens to
+// exist; after eight draws we fall back to the same triple plus a
+// 6-char alphanumeric tail so the function can't spin forever even
+// in pathological repos.
+func newWorktreeName(cwd string) string {
 	parent := filepath.Join(cwd, ".claude", "worktrees")
 	for attempt := 0; attempt < 8; attempt++ {
-		name := "ask-" + pid + "-" + randomWhimsy()
+		name := randomWhimsy()
 		if _, err := os.Stat(filepath.Join(parent, name)); os.IsNotExist(err) {
 			return name
 		}
 	}
-	return "ask-" + pid + "-" + randomWhimsy() + "-" + randomAlphanum(6)
+	return randomWhimsy() + "-" + randomAlphanum(6)
 }
 
 // randomWhimsy picks one adjective, one verb, one noun from the
@@ -317,26 +317,6 @@ func pickWord(list []string) string {
 		return list[0]
 	}
 	return list[n.Int64()]
-}
-
-// sanitizeProviderSegment defends against an unexpected provider ID
-// landing in a filesystem path. Strips anything outside [a-z0-9-], and
-// falls back to "x" if the input was entirely bad.
-func sanitizeProviderSegment(id string) string {
-	if id == "" {
-		return "x"
-	}
-	var b strings.Builder
-	for _, r := range strings.ToLower(id) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
-			b.WriteRune(r)
-		}
-	}
-	if b.Len() == 0 {
-		return "x"
-	}
-	return b.String()
 }
 
 // randomAlphanum returns n lowercase alphanumeric characters drawn from

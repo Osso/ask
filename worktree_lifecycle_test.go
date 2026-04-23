@@ -9,7 +9,7 @@ import (
 )
 
 // TestEnsureProc_CreatesWorktreeFirstCall verifies that ensureProc with
-// m.worktree=true creates a new .claude/worktrees/ask-<provider>-<id>
+// m.worktree=true creates a new .claude/worktrees/<adj>-<verb>-<noun>
 // on the first call and stores the name on the model.
 func TestEnsureProc_CreatesWorktreeFirstCall(t *testing.T) {
 	dir := initGitRepo(t)
@@ -27,8 +27,9 @@ func TestEnsureProc_CreatesWorktreeFirstCall(t *testing.T) {
 	if m.worktreeName == "" {
 		t.Fatal("ensureProc did not assign a worktree name")
 	}
-	if !strings.HasPrefix(m.worktreeName, "ask-codex-") {
-		t.Errorf("worktree name=%q want ask-codex-*", m.worktreeName)
+	parts := strings.Split(m.worktreeName, "-")
+	if len(parts) != 3 {
+		t.Errorf("worktree name=%q want <adj>-<verb>-<noun>", m.worktreeName)
 	}
 	// Provider must have been asked to StartSession with Cwd at the
 	// worktree path.
@@ -126,17 +127,23 @@ func TestEnsureProc_OutsideGitNoWorktree(t *testing.T) {
 	}
 }
 
-// TestCreateWorktree_UsesProviderTag confirms createWorktree actually
-// bakes the provider id into the directory name as documented.
-func TestCreateWorktree_UsesProviderTag(t *testing.T) {
+// TestCreateWorktree_NameIsWhimsyTriple confirms createWorktree
+// produces an adjective-verb-noun directory name drawn from the
+// curated lists.
+func TestCreateWorktree_NameIsWhimsyTriple(t *testing.T) {
 	dir := initGitRepo(t)
 	t.Chdir(dir)
-	path, name, err := createWorktree("codex")
+	path, name, err := createWorktree()
 	if err != nil {
 		t.Fatalf("createWorktree: %v", err)
 	}
-	if !strings.HasPrefix(name, "ask-codex-") {
-		t.Errorf("name=%q should start with ask-codex-", name)
+	parts := strings.Split(name, "-")
+	if len(parts) != 3 {
+		t.Errorf("name=%q want 3-word triple", name)
+	} else {
+		assertInList(t, "adjective", parts[0], worktreeAdjectives)
+		assertInList(t, "verb", parts[1], worktreeVerbs)
+		assertInList(t, "noun", parts[2], worktreeNouns)
 	}
 	if !strings.HasSuffix(path, name) {
 		t.Errorf("path=%q should end with name=%q", path, name)
@@ -149,7 +156,7 @@ func TestCreateWorktree_UsesProviderTag(t *testing.T) {
 func TestCreateWorktree_LocksItAsOurs(t *testing.T) {
 	dir := initGitRepo(t)
 	t.Chdir(dir)
-	path, _, err := createWorktree("claude")
+	path, _, err := createWorktree()
 	if err != nil {
 		t.Fatalf("createWorktree: %v", err)
 	}

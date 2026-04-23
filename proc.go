@@ -56,7 +56,7 @@ func (m *model) ensureProc() error {
 			// Reuse (provider swap, proc restart, or resume).
 			args.Cwd = worktreePath(cwd, m.worktreeName)
 		case m.sessionID == "":
-			path, name, err := createWorktree(m.provider.ID())
+			path, name, err := createWorktree()
 			if err != nil {
 				return err
 			}

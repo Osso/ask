@@ -132,25 +132,18 @@ func TestWorktreeNameFromCwd(t *testing.T) {
 	}
 }
 
-func TestNewWorktreeName_FormatAndProviderTag(t *testing.T) {
+func TestNewWorktreeName_Format(t *testing.T) {
 	tmp := t.TempDir()
-	name := newWorktreeName(tmp, "codex")
-	// Shape: ask-<provider>-<adjective>-<verb>-<noun>. Parts split
-	// to exactly five dash-separated segments with the provider in
-	// position 2 and each whimsy word drawn from the curated lists.
+	name := newWorktreeName(tmp)
+	// Shape: <adjective>-<verb>-<noun>. Three dash-separated words,
+	// each drawn from the curated list at its position.
 	parts := strings.Split(name, "-")
-	if len(parts) != 5 {
-		t.Fatalf("want 5 dash-separated parts, got %d: %q", len(parts), name)
+	if len(parts) != 3 {
+		t.Fatalf("want 3 dash-separated parts, got %d: %q", len(parts), name)
 	}
-	if parts[0] != "ask" {
-		t.Errorf("first segment=%q want 'ask'", parts[0])
-	}
-	if parts[1] != "codex" {
-		t.Errorf("provider segment=%q want 'codex'", parts[1])
-	}
-	assertInList(t, "adjective", parts[2], worktreeAdjectives)
-	assertInList(t, "verb", parts[3], worktreeVerbs)
-	assertInList(t, "noun", parts[4], worktreeNouns)
+	assertInList(t, "adjective", parts[0], worktreeAdjectives)
+	assertInList(t, "verb", parts[1], worktreeVerbs)
+	assertInList(t, "noun", parts[2], worktreeNouns)
 }
 
 func assertInList(t *testing.T, kind, word string, list []string) {
@@ -167,21 +160,11 @@ func TestNewWorktreeName_DifferentIDsEachCall(t *testing.T) {
 	tmp := t.TempDir()
 	seen := map[string]bool{}
 	for i := 0; i < 50; i++ {
-		n := newWorktreeName(tmp, "claude")
+		n := newWorktreeName(tmp)
 		if seen[n] {
 			t.Fatalf("newWorktreeName collided after %d calls: %q", i, n)
 		}
 		seen[n] = true
-	}
-}
-
-func TestNewWorktreeName_SanitizesProviderSegment(t *testing.T) {
-	tmp := t.TempDir()
-	// Uppercase + a path-traversal attempt + mixed chars — must collapse
-	// to the safe subset without leaving bad path bits in the name.
-	n := newWorktreeName(tmp, "Code/x../!")
-	if !strings.HasPrefix(n, "ask-codex-") {
-		t.Errorf("unsafe chars should be stripped; got %q", n)
 	}
 }
 
@@ -267,29 +250,10 @@ func TestRandomWhimsy_ProducesVariedOutput(t *testing.T) {
 	}
 }
 
-func TestSanitizeProviderSegment(t *testing.T) {
-	cases := []struct {
-		in, want string
-	}{
-		{"claude", "claude"},
-		{"codex", "codex"},
-		{"Codex", "codex"},
-		{"co-dex", "co-dex"},
-		{"CO/DEX", "codex"},
-		{"", "x"},
-		{"///", "x"},
-	}
-	for _, c := range cases {
-		if got := sanitizeProviderSegment(c.in); got != c.want {
-			t.Errorf("sanitizeProviderSegment(%q)=%q want %q", c.in, got, c.want)
-		}
-	}
-}
-
 func TestWorktreePath_Absolute(t *testing.T) {
 	tmp := t.TempDir()
-	got := worktreePath(tmp, "ask-claude-abc123def456")
-	want := filepath.Join(tmp, ".claude", "worktrees", "ask-claude-abc123def456")
+	got := worktreePath(tmp, "dapper-brewing-dolphin")
+	want := filepath.Join(tmp, ".claude", "worktrees", "dapper-brewing-dolphin")
 	if got != want {
 		t.Errorf("worktreePath=%q want %q", got, want)
 	}
@@ -340,7 +304,7 @@ func TestCreateExternalWorktree_MakesSiblingAndBranch(t *testing.T) {
 	}
 	dir := initGitRepo(t)
 	t.Chdir(dir)
-	path, name, err := createWorktree("claude")
+	path, name, err := createWorktree()
 	if err != nil {
 		t.Fatalf("createExternalWorktree: %v", err)
 	}
@@ -389,7 +353,7 @@ func TestPruneWorktrees_NoOpInsideWorktree(t *testing.T) {
 	}
 	dir := initGitRepo(t)
 	t.Chdir(dir)
-	path, _, err := createWorktree("claude")
+	path, _, err := createWorktree()
 	if err != nil {
 		t.Fatalf("createExternalWorktree: %v", err)
 	}
@@ -407,7 +371,7 @@ func TestPruneWorktrees_RemovesOurOwnLocked(t *testing.T) {
 	}
 	dir := initGitRepo(t)
 	t.Chdir(dir)
-	path, name, err := createWorktree("claude")
+	path, name, err := createWorktree()
 	if err != nil {
 		t.Fatalf("createExternalWorktree: %v", err)
 	}
@@ -457,7 +421,7 @@ func TestWorktreeLocks_ParsesPorcelain(t *testing.T) {
 	}
 	dir := initGitRepo(t)
 	t.Chdir(dir)
-	path, name, err := createWorktree("claude")
+	path, name, err := createWorktree()
 	if err != nil {
 		t.Fatalf("createExternalWorktree: %v", err)
 	}
@@ -491,7 +455,7 @@ func TestEnsureResumeWorktree_RecreatesMissingDir(t *testing.T) {
 	}
 	dir := initGitRepo(t)
 	t.Chdir(dir)
-	path, name, err := createWorktree("claude")
+	path, name, err := createWorktree()
 	if err != nil {
 		t.Fatalf("createExternalWorktree: %v", err)
 	}
