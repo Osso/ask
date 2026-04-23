@@ -11,6 +11,7 @@ type askConfig struct {
 	// means "use the first registered provider" — currently Claude.
 	Provider string       `json:"provider,omitempty"`
 	Claude   claudeConfig `json:"claude"`
+	Codex    codexConfig  `json:"codex,omitempty"`
 	UI       uiConfig     `json:"ui,omitempty"`
 }
 
@@ -19,6 +20,12 @@ type claudeConfig struct {
 	Model         string               `json:"model,omitempty"`
 	Effort        string               `json:"effort,omitempty"`
 	Ollama        ollamaConfig         `json:"ollama,omitempty"`
+}
+
+type codexConfig struct {
+	SlashCommands []providerSlashEntry `json:"slashCommands,omitempty"`
+	Model         string               `json:"model,omitempty"`
+	Effort        string               `json:"effort,omitempty"`
 }
 
 type ollamaConfig struct {
