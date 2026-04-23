@@ -132,7 +132,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ask: mcp:", err)
 		os.Exit(1)
 	}
-	a := newApp(first, cfg)
+	a := newApp(first)
 	p := tea.NewProgram(a, tea.WithFPS(120))
 	setTeaProgram(p)
 	final, err := p.Run()

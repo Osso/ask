@@ -9,7 +9,6 @@ import (
 )
 
 type app struct {
-	cfg    askConfig
 	tabs   []*model
 	active int
 	nextID int
@@ -17,9 +16,12 @@ type app struct {
 	height int
 }
 
-func newApp(first *model, cfg askConfig) app {
+// newApp wraps the first tab in the app struct. Config is deliberately
+// not cached here — openTab reloads from disk so /config toggles made
+// between tabs (including the default provider) take effect on the
+// very next Ctrl+T.
+func newApp(first *model) app {
 	return app{
-		cfg:    cfg,
 		tabs:   []*model{first},
 		active: 0,
 		nextID: first.id + 1,
@@ -198,7 +200,12 @@ func (a app) indexOfTab(tabID int) int {
 // makes it active, kicks its Init cmds and re-broadcasts size so all tabs
 // know their new body height.
 func (a app) openTab() (tea.Model, tea.Cmd) {
-	t, err := newTab(a.nextID, a.cfg)
+	// Always load the on-disk config so a new tab picks up any
+	// /config changes made since startup (default provider, theme,
+	// toggles, etc.). Caching at app-startup would silently strand
+	// the old values in every subsequent tab.
+	cfg, _ := loadConfig()
+	t, err := newTab(a.nextID, cfg)
 	if err != nil {
 		active := a.activeTab()
 		active.appendHistory(outputStyle.Render(errStyle.Render(

@@ -35,9 +35,14 @@ func (m model) configItemsAll() []configItem {
 	if m.worktree {
 		worktree = "on"
 	}
+	// The Default Provider row reflects what's saved on disk, not the
+	// current tab's provider. The picker only writes cfg.Provider and
+	// leaves m.provider alone, so reading m.provider here would show a
+	// stale value on the second /config open.
 	provName := "(none)"
-	if m.provider != nil {
-		provName = m.provider.DisplayName()
+	cfg, _ := loadConfig()
+	if p := providerByID(cfg.Provider); p != nil {
+		provName = p.DisplayName()
 	}
 	return []configItem{
 		{"Quiet Mode", quiet, "quiet"},
@@ -415,9 +420,16 @@ func (m model) viewThemePicker() string {
 // their provider; the next tab (Ctrl+T) inherits the new default.
 func (m model) openConfigProviderPicker() model {
 	m.configProviderPickerActive = true
-	cur := "claude"
-	if m.provider != nil {
-		cur = m.provider.ID()
+	// Seed the cursor from the on-disk default, not the current tab's
+	// provider. When the user reopens /config after changing the
+	// default, the picker should land on whatever was saved — possibly
+	// different from the provider this tab was booted with.
+	cfg, _ := loadConfig()
+	cur := cfg.Provider
+	if cur == "" {
+		if p := providerByID(""); p != nil {
+			cur = p.ID()
+		}
 	}
 	m.configProviderBackup = cur
 	m.configProviderCursor = 0
