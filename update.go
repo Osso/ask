@@ -300,6 +300,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		m.dismissCancelTurnConfirmIfIdle()
 		if msg.res.SessionID != "" {
 			m.sessionID = msg.res.SessionID
+			m.recordVirtualSession(msg.res.SessionID)
 		}
 		// Claude just finished a turn, which means it hit the API and
 		// wrote a fresh .usage-cache.json. Re-read so the 5h/wk chip
@@ -369,7 +370,14 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case historyLoadedMsg:
-		if msg.sessionID != m.sessionID {
+		// Cross-provider translation loads a source provider's native
+		// id while m.sessionID is still empty, so VS id is the only
+		// reliable pairing; fall back to sessionID for untagged loads.
+		if msg.virtualSessionID != "" {
+			if msg.virtualSessionID != m.virtualSessionID {
+				return m, nil
+			}
+		} else if msg.sessionID != m.sessionID {
 			return m, nil
 		}
 		if msg.err != nil {
@@ -384,11 +392,19 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		if msg.silent {
 			m.history = msg.entries
 		} else {
+			doneNote := fmt.Sprintf("✓ resumed session %s", short(m.sessionID))
+			if m.sessionID == "" && m.pendingTranslationSource != "" {
+				doneNote = fmt.Sprintf("✓ translated from %s — next turn spawns a fresh %s session",
+					m.pendingTranslationSource, m.provider.DisplayName())
+			}
 			m.history = append(msg.entries, historyEntry{
 				kind: histPrerendered,
-				text: outputStyle.Render(promptStyle.Render(
-					fmt.Sprintf("✓ resumed session %s", short(m.sessionID)))),
+				text: outputStyle.Render(promptStyle.Render(doneNote)),
 			})
+		}
+		if m.pendingTranslationSource != "" {
+			m.pendingPrelude = buildTranslationPrelude(m.pendingTranslationSource, msg.entries)
+			m.pendingTranslationSource = ""
 		}
 		m.lastContentFP = ""
 		m.layout()
@@ -991,35 +1007,127 @@ func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case tea.KeyEnter:
 		if len(m.sessions) > 0 {
-			m.killProc()
-			entry := m.sessions[m.pickerIdx]
-			m.sessionID = entry.id
-			m.resumeCwd = entry.cwd
-			m.mode = modeInput
-			m.history = nil
-			m.appendHistory(outputStyle.Render(dimStyle.Render(
-				fmt.Sprintf("loading session %s…", short(entry.id)))))
-			return m, loadHistoryCmd(m.provider, entry.id,
-				HistoryOpts{
-					RenderDiffs: m.renderDiffs,
-					ToolOutput:  m.toolOutputMode,
-					QuietMode:   m.quietMode,
-				}, false)
+			return m.resumeVirtualSession(m.sessions[m.pickerIdx])
 		}
 	}
 	return m, nil
+}
+
+// resumeVirtualSession wires the picker's selection into the tab.
+// Every entry is a VirtualSession id; the current tab's provider
+// decides which native session to load:
+//
+//   - the VS already has a mapping for this provider → resume that
+//     native id directly (m.sessionID set, provider.LoadHistory runs)
+//   - the VS has no mapping for this provider → render history via
+//     a source provider that does have a mapping (so the user sees
+//     the conversation), but leave m.sessionID empty so the next
+//     user turn starts a fresh native session on the current
+//     provider. providerDoneMsg's upsert then records the fresh
+//     native id under the same VS id.
+func (m model) resumeVirtualSession(entry sessionEntry) (tea.Model, tea.Cmd) {
+	m.killProc()
+	store, err := loadVirtualSessions()
+	if err != nil {
+		m.appendHistory(outputStyle.Render(errStyle.Render(
+			"could not load sessions.json: " + err.Error())))
+		m.mode = modeInput
+		return m, nil
+	}
+	vs := store.findByID(entry.virtualSessionID)
+	if vs == nil {
+		m.appendHistory(outputStyle.Render(errStyle.Render(
+			"virtual session " + short(entry.virtualSessionID) + " not found")))
+		m.mode = modeInput
+		return m, nil
+	}
+	m.virtualSessionID = vs.ID
+	m.mode = modeInput
+	m.history = nil
+	m.pendingPrelude = ""
+	m.pendingTranslationSource = ""
+
+	providerID := m.provider.ID()
+	opts := HistoryOpts{
+		RenderDiffs: m.renderDiffs,
+		ToolOutput:  m.toolOutputMode,
+		QuietMode:   m.quietMode,
+	}
+	if ref, ok := vs.ProviderSessions[providerID]; ok && ref.SessionID != "" {
+		m.sessionID = ref.SessionID
+		m.resumeCwd = ref.Cwd
+		m.appendHistory(outputStyle.Render(dimStyle.Render(
+			fmt.Sprintf("loading session %s…", short(vs.ID)))))
+		return m, loadHistoryCmd(m.provider, ref.SessionID, vs.ID, opts, false)
+	}
+
+	// No mapping for the current provider: render history from any
+	// provider that has one so the user sees the conversation, and
+	// leave m.sessionID empty so the next send spawns a fresh native
+	// session. The historyLoadedMsg handler builds a translation
+	// prelude from the loaded entries; sendToProvider prepends it to
+	// the next wire turn so the target provider's LLM sees prior
+	// context. The post-turn upsert wires the new native id onto
+	// the same VS id.
+	m.sessionID = ""
+	m.resumeCwd = ""
+	sourceProv, sourceRef, ok := pickSourceProvider(vs)
+	if !ok {
+		m.appendHistory(outputStyle.Render(dimStyle.Render(
+			fmt.Sprintf("resumed %s — no prior provider history to replay", short(vs.ID)))))
+		return m, nil
+	}
+	m.pendingTranslationSource = sourceProv.DisplayName()
+	m.appendHistory(outputStyle.Render(dimStyle.Render(
+		fmt.Sprintf("translating %s from %s → %s…",
+			short(vs.ID), sourceProv.DisplayName(), m.provider.DisplayName()))))
+	return m, loadHistoryCmd(sourceProv, sourceRef.SessionID, vs.ID, opts, false)
+}
+
+// pickSourceProvider returns a registered provider that has a native
+// session recorded on the VS, preferring LastProvider and falling
+// back to registry order. ok=false means no registered provider has
+// a mapping on this VS (empty or stranded-by-provider-unregister).
+func pickSourceProvider(vs *VirtualSession) (Provider, ProviderSessionRef, bool) {
+	if vs == nil {
+		return nil, ProviderSessionRef{}, false
+	}
+	tryID := func(id string) (Provider, ProviderSessionRef, bool) {
+		ref, ok := vs.ProviderSessions[id]
+		if !ok || ref.SessionID == "" {
+			return nil, ProviderSessionRef{}, false
+		}
+		for _, p := range providerRegistry {
+			if p.ID() == id {
+				return p, ref, true
+			}
+		}
+		return nil, ProviderSessionRef{}, false
+	}
+	if p, ref, ok := tryID(vs.LastProvider); ok {
+		return p, ref, true
+	}
+	for _, p := range providerRegistry {
+		if p, ref, ok := tryID(p.ID()); ok {
+			return p, ref, true
+		}
+	}
+	return nil, ProviderSessionRef{}, false
 }
 
 func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	cmd, _, _ := strings.Cut(line, " ")
 	switch cmd {
 	case "/resume":
-		return m, loadSessionsCmd(m.provider, m.cwd)
+		return m, loadSessionsCmd(m.cwd)
 	case "/new", "/clear":
 		m.killProc()
 		m.sessionID = ""
 		m.resumeCwd = ""
 		m.worktreeName = ""
+		m.virtualSessionID = ""
+		m.pendingPrelude = ""
+		m.pendingTranslationSource = ""
 		m.history = nil
 		m.appendHistory(outputStyle.Render(promptStyle.Render("✓ new session")))
 		return m, nil

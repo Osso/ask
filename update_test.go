@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -920,21 +921,34 @@ func TestUpdate_ProviderExitedIncludesStderrTail(t *testing.T) {
 	}
 }
 
-func TestHandleCommand_ResumeSchedulesLoadSessions(t *testing.T) {
+func TestHandleCommand_ResumeReadsVirtualSessions(t *testing.T) {
+	isolateHome(t)
 	fp := newFakeProvider()
-	var called bool
+	var listCalled bool
 	fp.listSessionsFn = func(cwd string) ([]sessionEntry, error) {
-		called = true
+		listCalled = true
 		return nil, nil
 	}
 	m := newTestModel(t, fp)
+	// Seed a VS for this cwd so /resume surfaces it.
+	store := &virtualSessionStore{Version: 1}
+	upsertVirtualSession(store, "", m.cwd, "fake", "nat-x", m.cwd, "vs preview", time.Now().UTC())
+	if err := saveVirtualSessions(store); err != nil {
+		t.Fatalf("save: %v", err)
+	}
 	_, cmd := m.handleCommand("/resume")
 	if cmd == nil {
 		t.Fatal("/resume must return a tea.Cmd")
 	}
-	_ = cmd() // runs the provider list
-	if !called {
-		t.Errorf("/resume should delegate to provider.ListSessions")
+	msg, ok := cmd().(sessionsLoadedMsg)
+	if !ok {
+		t.Fatalf("want sessionsLoadedMsg, got %T", cmd())
+	}
+	if listCalled {
+		t.Error("/resume must not delegate to provider.ListSessions")
+	}
+	if len(msg.sessions) != 1 || msg.sessions[0].preview != "vs preview" {
+		t.Errorf("VS not surfaced via /resume: %+v", msg.sessions)
 	}
 }
 

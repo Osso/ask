@@ -124,6 +124,9 @@ func loadClaudeHistory(sessionID string, opts HistoryOpts) ([]historyEntry, erro
 				continue
 			}
 			if s, ok := msg["content"].(string); ok && strings.TrimSpace(s) != "" {
+				if isTranslationPrelude(s) {
+					continue
+				}
 				entries = append(entries, historyEntry{
 					kind: histUser,
 					text: s,
@@ -255,19 +258,49 @@ func loadClaudeSessions(cwd string) ([]sessionEntry, error) {
 }
 
 // loadHistoryCmd wraps the provider's LoadHistory in a tea.Cmd so
-// update.go can schedule the replay asynchronously.
-func loadHistoryCmd(p Provider, sessionID string, opts HistoryOpts, silent bool) tea.Cmd {
+// update.go can schedule the replay asynchronously. vsID tags the
+// emitted historyLoadedMsg so the Update gate can match on the VS
+// id (cross-provider translation paths fire with sessionID pointing
+// at a non-current-provider native id, where the sessionID alone
+// can't pair the reply with the tab state).
+func loadHistoryCmd(p Provider, sessionID, vsID string, opts HistoryOpts, silent bool) tea.Cmd {
 	return func() tea.Msg {
 		entries, err := p.LoadHistory(sessionID, opts)
-		return historyLoadedMsg{sessionID: sessionID, entries: entries, err: err, silent: silent}
+		return historyLoadedMsg{
+			sessionID:        sessionID,
+			virtualSessionID: vsID,
+			entries:          entries,
+			err:              err,
+			silent:           silent,
+		}
 	}
 }
 
-// loadSessionsCmd wraps the provider's ListSessions in a tea.Cmd.
-func loadSessionsCmd(p Provider, cwd string) tea.Cmd {
+// loadSessionsCmd reads ~/.config/ask/sessions.json and surfaces the
+// virtual sessions scoped to workspace. Provider-native sessions
+// without a VS entry are hidden — legacy pre-VS sessions simply do
+// not appear in the picker. Each returned sessionEntry carries a
+// virtualSessionID so the picker's Enter handler can look the VS
+// back up and decide how to resume it (direct native-id resume,
+// translation, fresh native session) based on the current provider.
+func loadSessionsCmd(cwd string) tea.Cmd {
 	return func() tea.Msg {
-		sessions, err := p.ListSessions(cwd)
-		return sessionsLoadedMsg{sessions: sessions, err: err}
+		store, err := loadVirtualSessions()
+		if err != nil {
+			return sessionsLoadedMsg{err: err}
+		}
+		vss := store.listForWorkspace(cwd)
+		sessions := make([]sessionEntry, 0, len(vss))
+		for _, vs := range vss {
+			sessions = append(sessions, sessionEntry{
+				id:               vs.ID,
+				virtualSessionID: vs.ID,
+				cwd:              vs.Workspace,
+				preview:          vs.Preview,
+				modTime:          vs.UpdatedAt,
+			})
+		}
+		return sessionsLoadedMsg{sessions: sessions}
 	}
 }
 

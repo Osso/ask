@@ -247,7 +247,7 @@ func loadCodexHistory(sessionID string, opts HistoryOpts) ([]historyEntry, error
 			}
 			switch item.Role {
 			case "user":
-				if isCodexEnvironmentText(txt) {
+				if isCodexEnvironmentText(txt) || isTranslationPrelude(txt) {
 					continue
 				}
 				entries = append(entries, historyEntry{kind: histUser, text: txt})

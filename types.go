@@ -22,6 +22,12 @@ type sessionEntry struct {
 	cwd     string
 	preview string
 	modTime time.Time
+
+	// virtualSessionID pairs the picker entry with a VirtualSession
+	// in sessions.json. Downstream handlers use it to look the VS
+	// back up so the current provider picks the right native id — or
+	// translates when no mapping exists yet.
+	virtualSessionID string
 }
 
 type viewMode int
@@ -207,9 +213,14 @@ type sessionsLoadedMsg struct {
 
 type historyLoadedMsg struct {
 	sessionID string
-	entries   []historyEntry
-	err       error
-	silent    bool
+	// virtualSessionID tags the load so Update can pair the reply
+	// with the current VS. The translation path fires a load against
+	// a source provider's native id while m.sessionID is still empty,
+	// which would otherwise fail the sessionID gate.
+	virtualSessionID string
+	entries          []historyEntry
+	err              error
+	silent           bool
 }
 
 type frameCache struct {
@@ -237,6 +248,23 @@ type model struct {
 	renderer  *glamour.TermRenderer
 	sessionID string
 	resumeCwd string
+
+	// virtualSessionID pins the tab to a VirtualSession in
+	// ~/.config/ask/sessions.json so upserts accumulate native session
+	// ids under one id across providers. Set on /resume or first
+	// providerDoneMsg; cleared by /new and /clear.
+	virtualSessionID string
+
+	// pendingPrelude is a transcript prepended to the next user turn
+	// on wire (never on the UI bar) so the target provider's LLM sees
+	// prior conversation when no native mapping exists yet. Consumed
+	// once on first send; also cleared by /new, /clear, re-resume.
+	pendingPrelude string
+
+	// pendingTranslationSource carries the source provider's display
+	// name during a translation load; the historyLoadedMsg handler
+	// reads it to build pendingPrelude from the loaded entries.
+	pendingTranslationSource string
 	busy      bool
 	width     int
 	height    int

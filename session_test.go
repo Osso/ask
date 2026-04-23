@@ -348,7 +348,7 @@ func TestLoadHistoryCmd_DelegatesToProvider(t *testing.T) {
 	fp.loadHistoryFn = func(id string, opts HistoryOpts) ([]historyEntry, error) {
 		return []historyEntry{{kind: histResponse, text: id}}, nil
 	}
-	cmd := loadHistoryCmd(fp, "my-session", HistoryOpts{}, false)
+	cmd := loadHistoryCmd(fp, "my-session", "", HistoryOpts{}, false)
 	msg := cmd()
 	h, ok := msg.(historyLoadedMsg)
 	if !ok {
@@ -359,19 +359,75 @@ func TestLoadHistoryCmd_DelegatesToProvider(t *testing.T) {
 	}
 }
 
-func TestLoadSessionsCmd_DelegatesToProvider(t *testing.T) {
-	fp := newFakeProvider()
-	fp.listSessionsFn = func(cwd string) ([]sessionEntry, error) {
-		return []sessionEntry{{id: "s-1", cwd: cwd}}, nil
+func TestLoadSessionsCmd_ReadsVirtualSessionsForWorkspace(t *testing.T) {
+	isolateHome(t)
+	store := &virtualSessionStore{Version: 1}
+	now := time.Now().UTC().Truncate(time.Second)
+	upsertVirtualSession(store, "", "/ws-a", "claude", "nat-a", "/ws-a", "preview A", now)
+	upsertVirtualSession(store, "", "/ws-b", "claude", "nat-b", "/ws-b", "preview B", now.Add(time.Hour))
+	if err := saveVirtualSessions(store); err != nil {
+		t.Fatalf("save: %v", err)
 	}
-	cmd := loadSessionsCmd(fp, "/tmp")
-	msg := cmd()
+	msg := loadSessionsCmd("/ws-a")()
 	s, ok := msg.(sessionsLoadedMsg)
 	if !ok {
 		t.Fatalf("want sessionsLoadedMsg, got %T", msg)
 	}
-	if len(s.sessions) != 1 || s.sessions[0].id != "s-1" || s.sessions[0].cwd != "/tmp" {
-		t.Errorf("wrong payload: %+v", s.sessions)
+	if s.err != nil {
+		t.Fatalf("unexpected err: %v", s.err)
+	}
+	if len(s.sessions) != 1 {
+		t.Fatalf("want 1 session for /ws-a, got %d: %+v", len(s.sessions), s.sessions)
+	}
+	entry := s.sessions[0]
+	if entry.virtualSessionID == "" {
+		t.Errorf("entry missing virtualSessionID: %+v", entry)
+	}
+	if entry.preview != "preview A" {
+		t.Errorf("preview=%q want 'preview A'", entry.preview)
+	}
+	if entry.cwd != "/ws-a" {
+		t.Errorf("cwd=%q want /ws-a", entry.cwd)
+	}
+}
+
+func TestLoadSessionsCmd_HidesLegacySessions(t *testing.T) {
+	home := isolateHome(t)
+	// A provider-native session on disk but NO entry in the VS store.
+	cwd := t.TempDir()
+	seedClaudeProjects(t, home, cwd, "legacy", `{"type":"user","message":{"role":"user","content":"old"}}`)
+	// VS store is empty.
+	msg := loadSessionsCmd(cwd)()
+	s := msg.(sessionsLoadedMsg)
+	if s.err != nil {
+		t.Fatalf("err: %v", s.err)
+	}
+	if len(s.sessions) != 0 {
+		t.Errorf("legacy native sessions must not surface in VS-backed /resume; got %+v", s.sessions)
+	}
+}
+
+func TestLoadSessionsCmd_SortsNewestFirst(t *testing.T) {
+	isolateHome(t)
+	store := &virtualSessionStore{Version: 1}
+	now := time.Now().UTC().Truncate(time.Second)
+	upsertVirtualSession(store, "", "/ws", "claude", "n1", "/ws", "older", now)
+	upsertVirtualSession(store, "", "/ws", "claude", "n2", "/ws", "newest", now.Add(time.Hour))
+	upsertVirtualSession(store, "", "/ws", "claude", "n3", "/ws", "middle", now.Add(30*time.Minute))
+	if err := saveVirtualSessions(store); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	msg := loadSessionsCmd("/ws")()
+	s := msg.(sessionsLoadedMsg)
+	if len(s.sessions) != 3 {
+		t.Fatalf("want 3, got %d", len(s.sessions))
+	}
+	got := []string{s.sessions[0].preview, s.sessions[1].preview, s.sessions[2].preview}
+	want := []string{"newest", "middle", "older"}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("sort[%d]=%q want %q", i, got[i], want[i])
+		}
 	}
 }
 
@@ -382,7 +438,7 @@ func TestLoadHistoryCmd_PropagatesError(t *testing.T) {
 	fp.loadHistoryFn = func(id string, opts HistoryOpts) ([]historyEntry, error) {
 		return nil, errMarker{}
 	}
-	msg := loadHistoryCmd(fp, "sid", HistoryOpts{}, true)()
+	msg := loadHistoryCmd(fp, "sid", "", HistoryOpts{}, true)()
 	h := msg.(historyLoadedMsg)
 	if h.err == nil {
 		t.Errorf("err should propagate")
@@ -412,18 +468,26 @@ func TestLoadClaudeHistory_BrokenLinesAreSkipped(t *testing.T) {
 }
 
 func TestLoadSessionsCmd_ReturnsError(t *testing.T) {
-	fp := newFakeProvider()
-	fp.listSessionsFn = func(cwd string) ([]sessionEntry, error) {
-		return nil, errMarker{}
+	isolateHome(t)
+	// Write a malformed sessions.json so loadVirtualSessions fails.
+	path, err := virtualSessionsPath()
+	if err != nil {
+		t.Fatalf("path: %v", err)
 	}
-	msg := loadSessionsCmd(fp, "/tmp")()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("{garbage"), 0o600); err != nil {
+		t.Fatalf("write garbage: %v", err)
+	}
+	msg := loadSessionsCmd("/tmp")()
 	s := msg.(sessionsLoadedMsg)
 	if s.err == nil {
-		t.Errorf("expected err to surface")
+		t.Errorf("expected err to surface when sessions.json is corrupt")
 	}
 }
 
 func TestLoadHistoryCmd_ReturnsTeaCmd(t *testing.T) {
 	fp := newFakeProvider()
-	var _ tea.Cmd = loadHistoryCmd(fp, "sid", HistoryOpts{}, false)
+	var _ tea.Cmd = loadHistoryCmd(fp, "sid", "", HistoryOpts{}, false)
 }

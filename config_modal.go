@@ -62,7 +62,7 @@ func (m model) refreshHistoryCmd() tea.Cmd {
 	if m.busy || m.sessionID == "" {
 		return nil
 	}
-	return loadHistoryCmd(m.provider, m.sessionID,
+	return loadHistoryCmd(m.provider, m.sessionID, m.virtualSessionID,
 		HistoryOpts{
 			RenderDiffs: m.renderDiffs,
 			ToolOutput:  m.toolOutputMode,

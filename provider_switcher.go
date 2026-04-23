@@ -139,6 +139,10 @@ func (m model) applyProviderSwitch(model string) (tea.Model, tea.Cmd) {
 	newProv := providerRegistry[m.providerSwitchProvIdx]
 	newSettings := newProv.LoadSettings()
 	sameProvider := m.provider != nil && m.provider.ID() == newProv.ID()
+	var oldProvName string
+	if m.provider != nil {
+		oldProvName = m.provider.DisplayName()
+	}
 
 	// Kill the active proc — even on a same-provider swap, the new
 	// model flag only takes effect after a fresh fork.
@@ -157,14 +161,22 @@ func (m model) applyProviderSwitch(model string) (tea.Model, tea.Cmd) {
 	m.lastUsageTokens = 0
 	m.modelForContext = ""
 	m.codexUsage = codexUsage{}
+	var historyCmd tea.Cmd
 	if !sameProvider {
-		// Cross-provider swaps drop the old session id (session ids
-		// are provider-specific), but the worktree is shared: every
-		// backend in this tab runs inside the same
-		// .claude/worktrees/ask-… directory so they collaborate on
-		// the same branch.
+		// Cross-provider swap: if the tab is inside a virtual session,
+		// route the new provider's resume context through the VS store.
+		// A native mapping → resume it on the new provider (UI reloads
+		// via loadHistoryCmd). No mapping → stash a prelude built from
+		// the current on-screen history so the new provider's LLM sees
+		// prior context on the next send. Without a VS we fall through
+		// to the legacy reset (sessionID cleared, no prelude).
 		m.sessionID = ""
 		m.resumeCwd = ""
+		m.pendingPrelude = ""
+		m.pendingTranslationSource = ""
+		if m.virtualSessionID != "" {
+			historyCmd = m.applyVSProviderSwap(oldProvName, newProv)
+		}
 	}
 
 	var msg string
@@ -183,7 +195,46 @@ func (m model) applyProviderSwitch(model string) (tea.Model, tea.Cmd) {
 	// Refresh slash commands from the new provider so /model, /resume,
 	// etc. match. Same-provider swaps still re-probe so any cached
 	// commands reflect whatever the new model unlocks.
-	return m, newProv.ProbeInit(m.sessionArgs())
+	probe := newProv.ProbeInit(m.sessionArgs())
+	if historyCmd != nil {
+		return m, tea.Batch(probe, historyCmd)
+	}
+	return m, probe
+}
+
+// applyVSProviderSwap routes a cross-provider swap through the
+// virtual session store: when the new provider already has a native
+// mapping for this VS, sets sessionID/resumeCwd and returns a
+// loadHistoryCmd so the UI reflects the new provider's view.
+// Otherwise stashes a translation prelude derived from the current
+// m.history so the new provider's LLM sees prior context on the
+// first send. Returns nil when the store is unreachable or the VS
+// has vanished between tabs — caller treats that as a plain reset.
+func (m *model) applyVSProviderSwap(oldProvName string, newProv Provider) tea.Cmd {
+	store, err := loadVirtualSessions()
+	if err != nil {
+		debugLog("applyVSProviderSwap load: %v", err)
+		return nil
+	}
+	vs := store.findByID(m.virtualSessionID)
+	if vs == nil {
+		return nil
+	}
+	if ref, ok := vs.ProviderSessions[newProv.ID()]; ok && ref.SessionID != "" {
+		m.sessionID = ref.SessionID
+		m.resumeCwd = ref.Cwd
+		m.history = nil
+		opts := HistoryOpts{
+			RenderDiffs: m.renderDiffs,
+			ToolOutput:  m.toolOutputMode,
+			QuietMode:   m.quietMode,
+		}
+		return loadHistoryCmd(newProv, ref.SessionID, vs.ID, opts, false)
+	}
+	if prelude := buildTranslationPrelude(oldProvName, m.history); prelude != "" {
+		m.pendingPrelude = prelude
+	}
+	return nil
 }
 
 func (m model) viewProviderSwitch() string {
