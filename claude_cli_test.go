@@ -99,9 +99,9 @@ func TestClaudeCLIArgs_MCPConfigAndSettings(t *testing.T) {
 		t.Errorf("--settings payload should redirect AskUserQuestion to mcp bridge; got %s", settings)
 	}
 
-	// permission-prompt-tool should point at the approval_prompt MCP tool.
-	if got := argAfter(args, "--permission-prompt-tool"); got != "mcp__ask__approval_prompt" {
-		t.Errorf("--permission-prompt-tool=%q want mcp__ask__approval_prompt", got)
+	// permission-prompt-tool should point at the claude-bash-hook-approval MCP tool.
+	if got := argAfter(args, "--permission-prompt-tool"); got != "mcp__claude-bash-hook-approval__approval_prompt" {
+		t.Errorf("--permission-prompt-tool=%q want mcp__claude-bash-hook-approval__approval_prompt", got)
 	}
 }
 
