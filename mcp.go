@@ -17,6 +17,9 @@ import (
 
 const askProgressInterval = 20 * time.Second
 
+// maxMCPArgBytes caps incoming tool argument payloads to prevent memory exhaustion
+const maxMCPArgBytes = 1 << 20 // 1 MiB
+
 type mcpOption struct {
 	Label   string `json:"label" jsonschema:"short label for the option"`
 	Diagram string `json:"diagram,omitempty" jsonschema:"required only for pick_diagram kind: monospace box-drawing art, max 40 cols x 12 rows"`
@@ -233,6 +236,9 @@ func (b *mcpBridge) stop() {
 }
 
 func (b *mcpBridge) askTool(ctx context.Context, req *mcp.CallToolRequest, in askInput) (*mcp.CallToolResult, askOutput, error) {
+	if len(req.Params.Arguments) > maxMCPArgBytes {
+		return nil, askOutput{}, fmt.Errorf("ask_user_question: arguments exceed %d bytes", maxMCPArgBytes)
+	}
 	if len(in.Questions) == 0 {
 		return nil, askOutput{}, errors.New("at least one question is required")
 	}
@@ -286,6 +292,9 @@ func (b *mcpBridge) askTool(ctx context.Context, req *mcp.CallToolRequest, in as
 // with destination "session" | "userSettings" | "projectSettings" |
 // "localSettings"; "session" keeps the new rule in-memory for the current run.
 func (b *mcpBridge) approvalTool(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	if len(req.Params.Arguments) > maxMCPArgBytes {
+		return nil, fmt.Errorf("approval_prompt: arguments exceed %d bytes", maxMCPArgBytes)
+	}
 	var in approvalIn
 	if len(req.Params.Arguments) > 0 {
 		if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
