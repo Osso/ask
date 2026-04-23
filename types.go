@@ -32,6 +32,7 @@ const (
 	modeAskQuestion
 	modeApproval
 	modeConfig
+	modeProviderSwitch
 )
 
 type streamStatusMsg struct {
@@ -221,6 +222,21 @@ type model struct {
 	configThemePickerActive bool
 	configThemeCursor       int
 	configThemeBackup       string
+
+	// configProviderPickerActive toggles the /config sub-picker that
+	// sets cfg.Provider (default for new tabs). Uses the theme-picker
+	// pattern so Esc restores the original value.
+	configProviderPickerActive bool
+	configProviderCursor       int
+	configProviderBackup       string
+
+	// Ctrl+B multi-layer switcher state. Level 0 picks provider; Level 1
+	// picks a model from that provider's picker; Enter at Level 1
+	// applies both to the current tab and saves cfg.Provider as the new
+	// default. Esc at Level 1 pops to Level 0; Esc at Level 0 cancels.
+	providerSwitchLevel    int
+	providerSwitchProvIdx  int
+	providerSwitchModelIdx int
 
 	themeName string
 

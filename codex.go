@@ -28,16 +28,30 @@ func (codexProvider) ID() string          { return "codex" }
 func (codexProvider) DisplayName() string { return "Codex" }
 
 func (codexProvider) Capabilities() ProviderCapabilities {
-	return ProviderCapabilities{}
+	return ProviderCapabilities{
+		ModelPicker: true,
+	}
 }
 
-func (codexProvider) ModelPicker() ProviderPicker { return ProviderPicker{} }
-func (codexProvider) EffortOptions() []string     { return nil }
+// ModelPicker exposes /model for codex. Real codex model ids (gpt-5,
+// o3, …) aren't hardcoded here to avoid guessing — the AllowCustom row
+// lets the user type whatever their account supports. A richer picker
+// can be layered on once we wire Model/list into the protocol.
+func (codexProvider) ModelPicker() ProviderPicker {
+	return ProviderPicker{
+		Prompt:      "Select Codex model",
+		Options:     []string{"default"},
+		AllowCustom: true,
+	}
+}
+
+func (codexProvider) EffortOptions() []string { return nil }
 
 func (codexProvider) BaseSlashCommands() []slashCmd {
 	return []slashCmd{
 		{"/new", "start a new Codex session"},
 		{"/clear", "start a new Codex session"},
+		{"/model", "select the Codex model"},
 	}
 }
 

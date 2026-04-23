@@ -15,14 +15,21 @@ func TestCodexProvider_Metadata(t *testing.T) {
 		t.Errorf("DisplayName=%q want Codex", got)
 	}
 	caps := p.Capabilities()
-	// MVP: every capability is off. Asserted as a set so a future flip is
-	// loud.
-	if caps.NativeWorktree || caps.Resume || caps.ModelPicker ||
-		caps.EffortPicker || caps.AskUserQuestionMCP || caps.PermissionPromptMCP {
-		t.Errorf("MVP Capabilities should be all-false, got %+v", caps)
+	// ModelPicker is on (picker accepts a custom model id); everything
+	// else is still deferred. Asserted as a set so future flips are loud.
+	if !caps.ModelPicker {
+		t.Error("ModelPicker capability should be true so /model + Ctrl+B work")
 	}
-	if mp := p.ModelPicker(); len(mp.Options) != 0 {
-		t.Errorf("ModelPicker should be empty, got %+v", mp)
+	if caps.NativeWorktree || caps.Resume || caps.EffortPicker ||
+		caps.AskUserQuestionMCP || caps.PermissionPromptMCP {
+		t.Errorf("deferred capabilities should stay false, got %+v", caps)
+	}
+	mp := p.ModelPicker()
+	if !mp.AllowCustom {
+		t.Error("codex ModelPicker must AllowCustom so users can type model ids")
+	}
+	if len(mp.Options) == 0 {
+		t.Error("codex ModelPicker should expose at least a 'default' row")
 	}
 	if efforts := p.EffortOptions(); len(efforts) != 0 {
 		t.Errorf("EffortOptions should be empty, got %v", efforts)
@@ -32,7 +39,7 @@ func TestCodexProvider_Metadata(t *testing.T) {
 	for _, s := range p.BaseSlashCommands() {
 		names[s.name] = true
 	}
-	for _, want := range []string{"/new", "/clear"} {
+	for _, want := range []string{"/new", "/clear", "/model"} {
 		if !names[want] {
 			t.Errorf("BaseSlashCommands missing %q (got %v)", want, names)
 		}

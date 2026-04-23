@@ -120,7 +120,7 @@ func buildGlamourStyle(t theme) ansi.StyleConfig {
 func (m *model) layout() {
 	atBottom := m.viewport.AtBottom()
 	inputH := m.input.Height()
-	extra := m.pendingBlockHeight() + m.todoBlockHeight() + m.spinnerBlockHeight() + m.worktreeChipHeight()
+	extra := m.pendingBlockHeight() + m.todoBlockHeight() + m.spinnerBlockHeight() + m.statusChipHeight()
 	vpH := m.height - 1 - inputH - extra
 	if vpH < 1 {
 		vpH = 1
@@ -303,10 +303,11 @@ func (m model) View() tea.View {
 	needModal := m.mode == modeAskQuestion
 	needApproval := m.mode == modeApproval
 	needConfig := m.mode == modeConfig
+	needSwitch := m.mode == modeProviderSwitch
 	needCancelConfirm := m.cancelTurnConfirming && m.mode == modeInput
 	needCloseTabConfirm := m.closeTabConfirming && m.mode == modeInput
 
-	if (needBox || needModal || needApproval || needConfig || needCancelConfirm || needCloseTabConfirm) && m.width > 0 && m.height > 0 {
+	if (needBox || needModal || needApproval || needConfig || needSwitch || needCancelConfirm || needCloseTabConfirm) && m.width > 0 && m.height > 0 {
 		cbStart := time.Now()
 		canvas := uv.NewScreenBuffer(m.width, m.height)
 		uv.NewStyledString(body).Draw(canvas, image.Rectangle{
@@ -440,6 +441,40 @@ func (m model) View() tea.View {
 					Max: image.Pt(pX+pW, pY+pH),
 				})
 			}
+			if m.configProviderPickerActive {
+				picker := m.viewConfigProviderPicker()
+				pW := lipgloss.Width(picker)
+				pH := lipgloss.Height(picker)
+				pX := (m.width - pW) / 2
+				pY := (m.height - pH) / 2
+				if pX < 0 {
+					pX = 0
+				}
+				if pY < 0 {
+					pY = 0
+				}
+				uv.NewStyledString(picker).Draw(canvas, image.Rectangle{
+					Min: image.Pt(pX, pY),
+					Max: image.Pt(pX+pW, pY+pH),
+				})
+			}
+		}
+		if needSwitch {
+			picker := m.viewProviderSwitch()
+			pW := lipgloss.Width(picker)
+			pH := lipgloss.Height(picker)
+			pX := (m.width - pW) / 2
+			pY := (m.height - pH) / 2
+			if pX < 0 {
+				pX = 0
+			}
+			if pY < 0 {
+				pY = 0
+			}
+			uv.NewStyledString(picker).Draw(canvas, image.Rectangle{
+				Min: image.Pt(pX, pY),
+				Max: image.Pt(pX+pW, pY+pH),
+			})
 		}
 		if needCancelConfirm {
 			confirm := m.viewCancelTurnConfirm()
@@ -672,7 +707,7 @@ func (m model) viewBody() string {
 	if debugOn {
 		debugTrace("    vb.spinner", ss)
 	}
-	if chip := m.worktreeChip(); chip != "" {
+	if chip := m.statusChipRow(); chip != "" {
 		b.WriteString(chip)
 		b.WriteString("\n")
 	}
@@ -734,6 +769,54 @@ func renderTodoLine(t todoItem) string {
 	}
 }
 
+// statusChipRow renders a single status line that sits between the
+// spinner and the input. Worktree/background-worker badges anchor to
+// the left, the provider/model chip anchors to the right. The right
+// chip is always shown so the user can glance to see which backend they
+// are talking to; the left chip appears only when there's something to
+// report.
+func (m model) statusChipRow() string {
+	left := m.worktreeChip()
+	right := m.providerChip()
+	if right == "" && left == "" {
+		return ""
+	}
+	const leftMargin = 3
+	// Reserve width-2 for the scrollbar column so the chip doesn't get
+	// overwritten by viewport chrome. Width may be 0 during tests/init —
+	// fall back to just returning the two pieces joined.
+	if m.width <= 0 {
+		if left == "" {
+			return right
+		}
+		return strings.Repeat(" ", leftMargin) + left + "  " + right
+	}
+	lw := lipgloss.Width(left)
+	rw := lipgloss.Width(right)
+	usable := m.width - 2
+	pad := usable - leftMargin - lw - rw
+	if pad < 1 {
+		// Not enough room for both — favour the provider chip.
+		if rw+leftMargin > usable {
+			return right
+		}
+		pad = 1
+	}
+	if left == "" {
+		return strings.Repeat(" ", usable-rw) + right
+	}
+	return strings.Repeat(" ", leftMargin) + left + strings.Repeat(" ", pad) + right
+}
+
+func (m model) statusChipHeight() int {
+	if m.statusChipRow() == "" {
+		return 0
+	}
+	return 1
+}
+
+// worktreeChip is the left-anchored status badge: worktree path plus a
+// count of live background workers. Returns "" when neither is active.
 func (m model) worktreeChip() string {
 	var parts []string
 	if m.worktreeName != "" {
@@ -749,14 +832,21 @@ func (m model) worktreeChip() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "   " + dimStyle.Render(strings.Join(parts, "  "))
+	return dimStyle.Render(strings.Join(parts, "  "))
 }
 
-func (m model) worktreeChipHeight() int {
-	if m.worktreeName == "" && len(m.bgTasks) == 0 {
-		return 0
+// providerChip is the right-anchored status badge: current provider ID
+// and the model it's targeting. Shown even at idle so the user knows
+// which backend Ctrl+B will swap.
+func (m model) providerChip() string {
+	if m.provider == nil {
+		return ""
 	}
-	return 1
+	mdl := m.providerModel
+	if mdl == "" {
+		mdl = "default"
+	}
+	return dimStyle.Render("[ p: " + m.provider.ID() + "  m: " + mdl + " ]")
 }
 
 func (m model) pendingBlockHeight() int {

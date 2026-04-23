@@ -423,6 +423,8 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			return m.updateApproval(msg)
 		case modeConfig:
 			return m.updateConfigModal(msg)
+		case modeProviderSwitch:
+			return m.updateProviderSwitch(msg)
 		default:
 			return m.updateInput(msg)
 		}
@@ -480,6 +482,15 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if msg.Mod == tea.ModCtrl && msg.Code == 'v' {
 		return m, pasteImageCmd()
+	}
+	if msg.Mod == tea.ModCtrl && msg.Code == 'b' {
+		if m.busy {
+			// Don't allow swapping mid-turn — the stream reader is
+			// tied to the current proc and the session id is about to
+			// be wiped.
+			return m, nil
+		}
+		return m.openProviderSwitch(), nil
 	}
 	if msg.Mod == 0 && msg.Code == tea.KeyEsc {
 		if m.busy {
@@ -878,6 +889,12 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m.appendHistory(outputStyle.Render(promptStyle.Render("✓ new session")))
 		return m, nil
 	case "/model":
+		picker := m.provider.ModelPicker()
+		if len(picker.Options) == 0 && !picker.AllowCustom {
+			m.appendHistory(outputStyle.Render(errStyle.Render(
+				"/model: " + m.provider.DisplayName() + " has no model picker yet")))
+			return m, nil
+		}
 		m = m.startModelPicker()
 		return m, nil
 	case "/effort":

@@ -35,6 +35,10 @@ func (m model) configItemsAll() []configItem {
 	if m.worktree {
 		worktree = "on"
 	}
+	provName := "(none)"
+	if m.provider != nil {
+		provName = m.provider.DisplayName()
+	}
 	return []configItem{
 		{"Quiet Mode", quiet, "quiet"},
 		{"Cursor Blink", blink, "cursorBlink"},
@@ -42,6 +46,7 @@ func (m model) configItemsAll() []configItem {
 		{"Skip All Permissions", skipPerms, "skipAllPermissions"},
 		{"Worktree", worktree, "worktree"},
 		{"Theme", m.themeName, "theme"},
+		{"Default Provider", provName, "provider"},
 	}
 }
 
@@ -89,6 +94,9 @@ func (m model) updateConfigModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.configThemePickerActive {
 		return m.updateThemePicker(msg)
+	}
+	if m.configProviderPickerActive {
+		return m.updateConfigProviderPicker(msg)
 	}
 	if msg.Mod == tea.ModCtrl && msg.Code == 'c' {
 		return m.clearConfigModal(), nil
@@ -166,6 +174,9 @@ func (m model) updateConfigModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			case "theme":
 				m = m.openThemePicker()
+				return m, nil
+			case "provider":
+				m = m.openConfigProviderPicker()
 				return m, nil
 			}
 		}
@@ -390,6 +401,91 @@ func (m model) viewThemePicker() string {
 		help,
 	}, "\n")
 
+	return themePickerBoxStyle.Render(body)
+}
+
+// openConfigProviderPicker starts the /config → Default Provider
+// sub-picker. Unlike the quick Ctrl+B switcher, this one only writes
+// cfg.Provider — it doesn't touch the current tab. Existing tabs keep
+// their provider; the next tab (Ctrl+T) inherits the new default.
+func (m model) openConfigProviderPicker() model {
+	m.configProviderPickerActive = true
+	cur := "claude"
+	if m.provider != nil {
+		cur = m.provider.ID()
+	}
+	m.configProviderBackup = cur
+	m.configProviderCursor = 0
+	for i, p := range providerRegistry {
+		if p.ID() == cur {
+			m.configProviderCursor = i
+			break
+		}
+	}
+	return m
+}
+
+func (m model) closeConfigProviderPicker() model {
+	m.configProviderPickerActive = false
+	m.configProviderBackup = ""
+	m.configProviderCursor = 0
+	return m
+}
+
+func (m model) updateConfigProviderPicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Mod == tea.ModCtrl && msg.Code == 'c', msg.Code == tea.KeyEsc:
+		m = m.closeConfigProviderPicker()
+		return m, nil
+	case msg.Code == tea.KeyUp:
+		if m.configProviderCursor > 0 {
+			m.configProviderCursor--
+		}
+		return m, nil
+	case msg.Code == tea.KeyDown:
+		if m.configProviderCursor < len(providerRegistry)-1 {
+			m.configProviderCursor++
+		}
+		return m, nil
+	case msg.Code == tea.KeyEnter:
+		if m.configProviderCursor < 0 || m.configProviderCursor >= len(providerRegistry) {
+			m = m.closeConfigProviderPicker()
+			return m, nil
+		}
+		chosen := providerRegistry[m.configProviderCursor]
+		cfg, _ := loadConfig()
+		cfg.Provider = chosen.ID()
+		if err := saveConfig(cfg); err != nil {
+			debugLog("saveConfig err: %v", err)
+		}
+		m.appendHistory(outputStyle.Render(promptStyle.Render(
+			"✓ default provider → " + chosen.DisplayName() + " (applies to new tabs)")))
+		m = m.closeConfigProviderPicker()
+		m = m.clearConfigModal()
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m model) viewConfigProviderPicker() string {
+	innerW := 0
+	for _, p := range providerRegistry {
+		if w := lipgloss.Width(p.DisplayName()); w > innerW {
+			innerW = w
+		}
+	}
+	innerW += 4
+	if innerW < 24 {
+		innerW = 24
+	}
+	title := themePickerTitleStyle.Render("Default Provider")
+	opts := make([]string, 0, len(providerRegistry))
+	for _, p := range providerRegistry {
+		opts = append(opts, p.DisplayName())
+	}
+	rows := renderSwitcherRows(opts, m.configProviderCursor, innerW)
+	help := themePickerHelpStyle.Render("↑↓ navigate · enter save · esc cancel")
+	body := strings.Join([]string{title, "", strings.Join(rows, "\n"), "", help}, "\n")
 	return themePickerBoxStyle.Render(body)
 }
 

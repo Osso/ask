@@ -77,21 +77,15 @@ func newTab(id int, cfg askConfig) (*model, error) {
 	}
 	settings := provider.LoadSettings()
 
-	// MCP bridge is only needed when the provider lacks native
-	// AskUserQuestion or permission-prompt support. Providers that
-	// model both in their own protocol (future codex, gemini) skip
-	// the TCP listener entirely.
-	caps := provider.Capabilities()
-	var bridge *mcpBridge
-	mcpPort := 0
-	if caps.AskUserQuestionMCP || caps.PermissionPromptMCP {
-		b, err := newMCPBridge(id)
-		if err != nil {
-			return nil, err
-		}
-		bridge = b
-		mcpPort = b.port
+	// MCP bridge is started unconditionally so hot-swapping the
+	// provider in-tab (Ctrl+B) doesn't have to spin up a new listener.
+	// Providers that don't consume the bridge (codex) just ignore
+	// mcpPort; the cost is a single idle loopback goroutine.
+	bridge, err := newMCPBridge(id)
+	if err != nil {
+		return nil, err
 	}
+	mcpPort := bridge.port
 
 	m := &model{
 		id:                 id,
