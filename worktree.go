@@ -37,6 +37,16 @@ func ensureWorktreeGitignore() {
 		return
 	}
 	path := ".gitignore"
+	// prevent TOCTOU: if path is a symlink, refuse to mutate it
+	info, err := os.Lstat(path)
+	if err != nil && !os.IsNotExist(err) {
+		debugLog("worktree gitignore lstat %s: %v", path, err)
+		return
+	}
+	if err == nil && (info.Mode()&os.ModeSymlink != 0) {
+		debugLog("worktree gitignore %s is a symlink; skipping", path)
+		return
+	}
 	existing, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		debugLog("worktree gitignore read %s: %v", path, err)
@@ -50,8 +60,39 @@ func ensureWorktreeGitignore() {
 		next += "\n"
 	}
 	next += ".claude/worktrees/\n"
-	if err := os.WriteFile(path, []byte(next), 0o644); err != nil {
-		debugLog("worktree gitignore write %s: %v", path, err)
+
+	// determine file mode: preserve existing, default to 0o644
+	mode := os.FileMode(0o644)
+	if info != nil {
+		mode = info.Mode().Perm()
+	}
+	// atomic write via temp file in the same directory
+	tmp, err := os.CreateTemp(".", ".gitignore-tmp-*")
+	if err != nil {
+		debugLog("worktree gitignore tmpfile: %v", err)
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.WriteString(next); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		debugLog("worktree gitignore write tmp: %v", err)
+		return
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		debugLog("worktree gitignore chmod tmp: %v", err)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		debugLog("worktree gitignore close tmp: %v", err)
+		return
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		debugLog("worktree gitignore rename: %v", err)
 		return
 	}
 	debugLog("worktree gitignore added .claude/worktrees/ to %s", path)

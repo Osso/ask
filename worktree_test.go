@@ -82,6 +82,26 @@ func TestEnsureWorktreeGitignore_AppendsTrailingNewline(t *testing.T) {
 	}
 }
 
+func TestEnsureWorktreeGitignore_SkipSymlink(t *testing.T) {
+	dir := initGitRepo(t)
+	t.Chdir(dir)
+	// Create a target file and a .gitignore symlink pointing at it.
+	target := filepath.Join(dir, "real-gitignore")
+	writeFile(t, target, "node_modules/\n")
+	if err := os.Symlink(target, filepath.Join(dir, ".gitignore")); err != nil {
+		t.Skip("symlink not supported:", err)
+	}
+	ensureWorktreeGitignore()
+	// The symlink must not be replaced and the target must be unmodified.
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read target: %v", err)
+	}
+	if strings.Contains(string(data), ".claude/worktrees/") {
+		t.Errorf("symlink target was mutated: %q", string(data))
+	}
+}
+
 func TestEnsureWorktreeGitignore_SkipWhenAlreadyCovered(t *testing.T) {
 	dir := initGitRepo(t)
 	t.Chdir(dir)
