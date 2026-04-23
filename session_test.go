@@ -242,6 +242,35 @@ func TestLoadClaudeHistory_RenderDiffsWhenNotQuiet(t *testing.T) {
 	}
 }
 
+func TestLoadClaudeHistory_RendersToolResultOutput(t *testing.T) {
+	toolResult := map[string]any{
+		"type": "user",
+		"message": map[string]any{
+			"role":    "user",
+			"content": []any{},
+		},
+		"toolUseResult": map[string]any{
+			"stdout": "hello from tool",
+			"stderr": "",
+		},
+	}
+	lineBytes, _ := json.Marshal(toolResult)
+	_, id := setupHistoryFixture(t, "s4", string(lineBytes))
+	entries, err := loadClaudeHistory(id, HistoryOpts{})
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("want 1 entry, got %d: %+v", len(entries), entries)
+	}
+	if entries[0].kind != histPrerendered {
+		t.Fatalf("entry kind=%v want histPrerendered", entries[0].kind)
+	}
+	if !strings.Contains(entries[0].text, "hello from tool") {
+		t.Fatalf("entry missing tool text: %q", entries[0].text)
+	}
+}
+
 func TestLoadClaudeSessions_MergesMainAndWorktree(t *testing.T) {
 	home := isolateHome(t)
 	cwd := t.TempDir()

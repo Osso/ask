@@ -113,7 +113,7 @@ func claudeHookSettings(mcpPort int) string {
 }
 
 // shellQuote wraps s in single quotes so it survives /bin/sh -c intact.
-// Embedded single quotes are escaped via the classic '\'' sequence.
+// Embedded single quotes are escaped via the classic '\” sequence.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
@@ -521,7 +521,7 @@ func assistantTodos(ev map[string]any) ([]todoItem, bool) {
 }
 
 func userToolDiff(ev map[string]any) (string, []diffHunk, bool) {
-	result, _ := ev["tool_use_result"].(map[string]any)
+	result, _ := toolUseResultPayload(ev).(map[string]any)
 	return parseStructuredPatch(result)
 }
 
@@ -589,6 +589,11 @@ func userToolResult(ev map[string]any) (claudeToolResult, bool) {
 		// identifying the tool, but we don't rely on it — the rendered
 		// output stands on its own without a header when name is empty.
 		return res, true
+	}
+	if output, isError, ok := parseToolResultText(toolUseResultPayload(ev)); ok {
+		result, _ := toolUseResultPayload(ev).(map[string]any)
+		name, _ := result["type"].(string)
+		return claudeToolResult{name: name, output: output, isError: isError}, true
 	}
 	return claudeToolResult{}, false
 }

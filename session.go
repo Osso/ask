@@ -132,8 +132,9 @@ func loadClaudeHistory(sessionID string, opts HistoryOpts) ([]historyEntry, erro
 				lastAssistantIdx = -1
 				continue
 			}
+			toolRes := toolUseResultPayload(rec)
 			if opts.RenderDiffs && !opts.QuietMode {
-				result, _ := rec["toolUseResult"].(map[string]any)
+				result, _ := toolRes.(map[string]any)
 				if fp, hunks, ok := parseStructuredPatch(result); ok {
 					entries = append(entries, historyEntry{
 						kind: histPrerendered,

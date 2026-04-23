@@ -259,3 +259,71 @@ func itoa(n int) string {
 	}
 	return string(buf[i:])
 }
+
+// toolUseResultPayload returns the tool-result payload from either wire shape:
+// live stream events use "tool_use_result" while persisted jsonl records use
+// "toolUseResult".
+func toolUseResultPayload(rec map[string]any) any {
+	if v, ok := rec["tool_use_result"]; ok {
+		return v
+	}
+	return rec["toolUseResult"]
+}
+
+// parseToolResultText extracts a human-readable output body from tool-result
+// payloads while preserving whether the payload marked itself as an error.
+func parseToolResultText(v any) (text string, isError bool, ok bool) {
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return "", false, false
+		}
+		return s, strings.HasPrefix(s, "Error:"), true
+	case []any:
+		var parts []string
+		for _, item := range t {
+			s, err, got := parseToolResultText(item)
+			if !got {
+				continue
+			}
+			parts = append(parts, s)
+			isError = isError || err
+		}
+		if len(parts) == 0 {
+			return "", false, false
+		}
+		return strings.Join(parts, "\n\n"), isError, true
+	case map[string]any:
+		isError, _ = t["is_error"].(bool)
+		noOutputExpected, _ := t["noOutputExpected"].(bool)
+		stdout, _ := t["stdout"].(string)
+		stderr, _ := t["stderr"].(string)
+		stdout = strings.TrimSpace(stdout)
+		stderr = strings.TrimSpace(stderr)
+		var parts []string
+		if stdout != "" {
+			parts = append(parts, stdout)
+		}
+		if stderr != "" {
+			parts = append(parts, stderr)
+			isError = true
+		}
+		if len(parts) > 0 {
+			return strings.Join(parts, "\n\n"), isError, true
+		}
+		if noOutputExpected {
+			return "", false, false
+		}
+		for _, k := range []string{"output", "content", "text", "message", "error"} {
+			if raw, exists := t[k]; exists {
+				s, err, got := parseToolResultText(raw)
+				if !got {
+					continue
+				}
+				return s, isError || err || k == "error", true
+			}
+		}
+	}
+	return "", false, false
+}

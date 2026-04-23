@@ -182,8 +182,8 @@ func TestReadClaudeStream_TodoWriteEmitsTodoUpdatedMsg(t *testing.T) {
 		"message": map[string]any{
 			"content": []any{
 				map[string]any{
-					"type":  "tool_use",
-					"name":  "TodoWrite",
+					"type": "tool_use",
+					"name": "TodoWrite",
 					"input": map[string]any{
 						"todos": []any{
 							map[string]any{"content": "do thing", "activeForm": "doing thing", "status": "pending"},
@@ -271,9 +271,9 @@ func TestReadClaudeStream_ToolResultEmitsToolResultMsg(t *testing.T) {
 		"message": map[string]any{
 			"content": []any{
 				map[string]any{
-					"type":       "tool_result",
+					"type":        "tool_result",
 					"tool_use_id": "abc",
-					"content":    "hello world",
+					"content":     "hello world",
 				},
 			},
 		},
@@ -485,6 +485,33 @@ func TestReadClaudeStream_StructuredPatchEmitsDiff(t *testing.T) {
 	}
 	if len(got.hunks) != 1 || got.hunks[0].oldStart != 1 || got.hunks[0].newLines != 3 || len(got.hunks[0].lines) != 4 {
 		t.Errorf("hunk parse wrong: %+v", got.hunks)
+	}
+}
+
+func TestReadClaudeStream_ToolResultOutputEmitsToolResultMsg(t *testing.T) {
+	ev := map[string]any{
+		"type": "user",
+		"tool_use_result": map[string]any{
+			"stdout": "line1\nline2",
+			"stderr": "",
+		},
+	}
+	b, _ := json.Marshal(ev)
+	msgs := runStream(t, string(b))
+	var got *toolResultMsg
+	for _, m := range msgs {
+		if d, ok := m.(toolResultMsg); ok {
+			got = &d
+		}
+	}
+	if got == nil {
+		t.Fatalf("no toolResultMsg: %#v", msgs)
+	}
+	if got.output != "line1\nline2" {
+		t.Errorf("output=%q want line1/line2", got.output)
+	}
+	if got.isError {
+		t.Errorf("isError should be false")
 	}
 }
 

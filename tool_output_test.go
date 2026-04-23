@@ -162,3 +162,50 @@ func TestFormatToolInputValue_StringAndStruct(t *testing.T) {
 		t.Errorf("nil should stringify as 'null'; got %q", got)
 	}
 }
+
+func TestParseToolResultText_MapStdoutStderr(t *testing.T) {
+	got, isErr, ok := parseToolResultText(map[string]any{
+		"stdout": "ok",
+		"stderr": "warn",
+	})
+	if !ok {
+		t.Fatal("expected output")
+	}
+	if got != "ok\n\nwarn" {
+		t.Fatalf("text=%q want %q", got, "ok\n\nwarn")
+	}
+	if !isErr {
+		t.Fatal("stderr should mark isErr")
+	}
+}
+
+func TestParseToolResultText_StringErrorPrefix(t *testing.T) {
+	got, isErr, ok := parseToolResultText("Error: boom")
+	if !ok || got != "Error: boom" || !isErr {
+		t.Fatalf("got=(%q, %v, %v) want (Error: boom, true, true)", got, isErr, ok)
+	}
+}
+
+func TestUserToolResult_FallbacksToMessageToolResult(t *testing.T) {
+	ev := map[string]any{
+		"message": map[string]any{
+			"content": []any{
+				map[string]any{
+					"type":     "tool_result",
+					"content":  "hello from tool",
+					"is_error": false,
+				},
+			},
+		},
+	}
+	got, ok := userToolResult(ev)
+	if !ok {
+		t.Fatal("expected tool output from message block")
+	}
+	if got.output != "hello from tool" {
+		t.Fatalf("got=%q want hello from tool", got.output)
+	}
+	if got.isError {
+		t.Fatal("isErr should be false")
+	}
+}

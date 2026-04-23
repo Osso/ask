@@ -640,14 +640,17 @@ func codexToolCallSummary(itype string, item map[string]any) (string, map[string
 // completed item. Codex varies field names across item types (output /
 // stdout / result), so we try several before giving up.
 func codexToolResultSummary(item map[string]any) (string, bool) {
-	isError := false
+	isError := codexItemIsError(item)
+	if out, parsedErr, ok := parseToolResultText(item["result"]); ok {
+		return out, isError || parsedErr
+	}
 	if status, _ := item["status"].(string); status != "" && status != "completed" && status != "applied" && status != "succeeded" {
 		isError = true
 	}
 	if code, ok := item["exitCode"].(float64); ok && code != 0 {
 		isError = true
 	}
-	for _, key := range []string{"output", "result", "stdout"} {
+	for _, key := range []string{"output", "stdout"} {
 		if s, _ := item[key].(string); s != "" {
 			return s, isError
 		}
@@ -696,6 +699,19 @@ func codexItemStatus(item map[string]any) string {
 		return "planning…"
 	}
 	return ""
+}
+
+func codexItemIsError(item map[string]any) bool {
+	if status, _ := item["status"].(string); status == "failed" || status == "error" {
+		return true
+	}
+	if exit, ok := item["exitCode"].(float64); ok && int(exit) != 0 {
+		return true
+	}
+	if ok, _ := item["is_error"].(bool); ok {
+		return true
+	}
+	return false
 }
 
 // codexRequest builds a JSON-RPC 2.0 request frame.

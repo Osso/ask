@@ -547,6 +547,22 @@ func TestUpdate_ToolDiffMsgDroppedWhenQuiet(t *testing.T) {
 	}
 }
 
+func TestUpdate_ToolResultMsgAppendsHistory(t *testing.T) {
+	m := newTestModel(t, newFakeProvider())
+	m.proc = &providerProc{}
+	m.toolOutputMode = toolOutputShort
+	m2, _ := runUpdate(t, m, toolResultMsg{output: "tool says hi", proc: m.proc})
+	if len(m2.history) != 1 {
+		t.Fatalf("want 1 history entry, got %d", len(m2.history))
+	}
+	if m2.history[0].kind != histPrerendered {
+		t.Fatalf("kind=%v want histPrerendered", m2.history[0].kind)
+	}
+	if !strings.Contains(m2.history[0].text, "tool says hi") {
+		t.Fatalf("entry missing text: %q", m2.history[0].text)
+	}
+}
+
 func TestHandleCommand_NewClearsSession(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.sessionID = "S-X"

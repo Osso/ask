@@ -211,6 +211,25 @@ func TestCodexEventToMsgs_McpToolCallCompletedEmitsCallAndResult(t *testing.T) {
 	}
 }
 
+func TestCodexEventToMsgs_CommandExecutionResultEnvelopeEmitsToolResult(t *testing.T) {
+	proc := &providerProc{}
+	ev := parseCodexEvent(t, `{"method":"item/completed","params":{"item":{"type":"commandExecution","id":"c","status":"completed","result":{"stdout":"hello","stderr":""}}}}`)
+	msgs := codexEventToMsgs(ev, proc)
+	if len(msgs) != 2 {
+		t.Fatalf("want 2 msgs, got %d: %v", len(msgs), msgs)
+	}
+	out, ok := msgs[1].(toolResultMsg)
+	if !ok {
+		t.Fatalf("msg[1] %T want toolResultMsg", msgs[1])
+	}
+	if out.output != "hello" {
+		t.Errorf("output=%q want hello", out.output)
+	}
+	if out.isError {
+		t.Error("isError should be false")
+	}
+}
+
 func TestCodexEventToMsgs_TurnCompletedEmitsDoneAndComplete(t *testing.T) {
 	proc := &providerProc{}
 	ev := parseCodexEvent(t, `{"method":"turn/completed","params":{"threadId":"tid-abc","turn":{"id":"r","status":"completed"}}}`)
