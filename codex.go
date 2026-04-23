@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,8 +30,9 @@ func (codexProvider) DisplayName() string { return "Codex" }
 
 func (codexProvider) Capabilities() ProviderCapabilities {
 	return ProviderCapabilities{
-		Resume:      true,
-		ModelPicker: true,
+		Resume:       true,
+		ModelPicker:  true,
+		EffortPicker: true,
 	}
 }
 
@@ -46,7 +48,12 @@ func (codexProvider) ModelPicker() ProviderPicker {
 	}
 }
 
-func (codexProvider) EffortOptions() []string { return nil }
+// EffortOptions matches codex's ReasoningEffort enum ("default" is the
+// sentinel used throughout the picker UI meaning "don't set it"; codex
+// itself has no "default" value and picks one server-side).
+func (codexProvider) EffortOptions() []string {
+	return []string{"default", "none", "minimal", "low", "medium", "high", "xhigh"}
+}
 
 func (codexProvider) BaseSlashCommands() []slashCmd {
 	return []slashCmd{
@@ -54,6 +61,7 @@ func (codexProvider) BaseSlashCommands() []slashCmd {
 		{"/new", "start a new Codex session"},
 		{"/clear", "start a new Codex session"},
 		{"/model", "select the Codex model"},
+		{"/effort", "select the Codex reasoning effort"},
 	}
 }
 
@@ -84,12 +92,22 @@ func (codexProvider) SaveSettings(s ProviderSettings) error {
 	return saveConfig(cfg)
 }
 
-// codexState is stashed on providerProc.payload. Send reads threadID and
-// bumps nextID on every user turn; the stream reader has no need for it.
+// codexState is stashed on providerProc.payload. Send reads threadID
+// and bumps nextID on every user turn. The stdin mutex serialises
+// writes from the Update goroutine (Send) and the stream-reader
+// goroutine (approval responders), which would otherwise risk
+// interleaving JSON frames on the pipe. done is closed when
+// readCodexStream exits so approval responder goroutines can abort
+// instead of blocking forever on a dead subprocess.
 type codexState struct {
-	mu       sync.Mutex
-	threadID string
-	nextID   uint64
+	mu        sync.Mutex
+	stdin     io.Writer
+	threadID  string
+	nextID    uint64
+	tabID     int
+	effort    string
+	skipPerms bool
+	done      chan struct{}
 }
 
 // codexCLIArgs returns the argv passed to the codex binary. Broken out so
@@ -133,7 +151,14 @@ func (codexProvider) StartSession(args ProviderSessionArgs) (*providerProc, chan
 		return nil, nil, err
 	}
 
-	state := &codexState{nextID: codexTurnStartBaseID}
+	state := &codexState{
+		nextID:    codexTurnStartBaseID,
+		stdin:     stdin,
+		tabID:     args.TabID,
+		effort:    args.Effort,
+		skipPerms: args.SkipAllPermissions,
+		done:      make(chan struct{}),
+	}
 	proc := &providerProc{cmd: cmd, stdin: stdin, stderr: stderr, payload: state}
 
 	sc := bufio.NewScanner(stdout)
@@ -192,6 +217,14 @@ func codexHandshake(stdin io.Writer, sc *bufio.Scanner, state *codexState, args 
 		method = "thread/resume"
 		params["threadId"] = args.SessionID
 	}
+	// Skip-all-permissions mirrors claude's --dangerously-skip-permissions:
+	// never ask the user, give the agent full access. Applied per-thread
+	// here so a subsequent toggle-off + new proc reverts to the default
+	// approval flow without any extra plumbing.
+	if args.SkipAllPermissions {
+		params["approvalPolicy"] = "never"
+		params["sandbox"] = "danger-full-access"
+	}
 	if err := codexWriteJSON(stdin, codexRequest(codexThreadStartID, method, params)); err != nil {
 		return err
 	}
@@ -235,7 +268,7 @@ func codexHandshake(stdin io.Writer, sc *bufio.Scanner, state *codexState, args 
 
 func (codexProvider) Send(p *providerProc, text string, attachments []pendingAttachment) error {
 	state, _ := p.payload.(*codexState)
-	if state == nil || state.threadID == "" {
+	if state == nil {
 		return fmt.Errorf("codex: session not initialized")
 	}
 	state.mu.Lock()
@@ -243,30 +276,79 @@ func (codexProvider) Send(p *providerProc, text string, attachments []pendingAtt
 	state.nextID++
 	tid := state.threadID
 	state.mu.Unlock()
+	if tid == "" {
+		return fmt.Errorf("codex: session not initialized")
+	}
 
-	return codexWriteJSON(p.stdin, codexRequest(id, "turn/start", map[string]any{
+	params := map[string]any{
 		"threadId": tid,
 		"input":    codexUserInput(text, attachments),
-	}))
+	}
+	// Effort is set per-turn rather than per-thread because codex's
+	// schema only accepts it on TurnStartParams (not ThreadStartParams).
+	// "default" (UI sentinel) means "don't override codex's own default".
+	if effort := codexEffortForWire(state, p); effort != "" {
+		params["effort"] = effort
+	}
+	return codexWriteJSONLocked(state, codexRequest(id, "turn/start", params))
 }
 
-// codexUserInput converts our pending-attachment bundle into Codex's input
-// array. MVP only forwards text; attachments are logged and dropped.
-func codexUserInput(text string, attachments []pendingAttachment) []map[string]any {
-	if len(attachments) > 0 {
-		debugLog("codex: dropping %d attachment(s) — image support TODO", len(attachments))
+// codexEffortForWire pulls the effort we should send this turn. Right
+// now it just reads a per-proc setting we track on the state so every
+// turn after a /effort pick lands with the right value; the indirection
+// leaves room to read overrides from elsewhere in the future.
+func codexEffortForWire(state *codexState, _ *providerProc) string {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.effort == "" || state.effort == "default" {
+		return ""
 	}
-	return []map[string]any{{"type": "text", "text": text}}
+	return state.effort
+}
+
+// codexUserInput converts the prompt + any image attachments into
+// codex's UserInput array. Text lives in TextUserInput; images land in
+// ImageUserInput with a base64 data URL so no temp files are needed
+// and codex can inline the bytes directly.
+func codexUserInput(text string, attachments []pendingAttachment) []map[string]any {
+	out := []map[string]any{{"type": "text", "text": text}}
+	for _, a := range attachments {
+		if len(a.data) == 0 {
+			continue
+		}
+		mime := a.mime
+		if mime == "" {
+			mime = "image/png"
+		}
+		url := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(a.data)
+		out = append(out, map[string]any{"type": "image", "url": url})
+	}
+	return out
 }
 
 // readCodexStream translates codex's JSON-RPC wire protocol into the
 // provider-neutral tea.Msg set. Each event emitted here carries the proc
 // pointer so the UI can drop messages from stale subprocesses.
+//
+// Server-initiated requests (approvals) are dispatched to a separate
+// handler that forwards them to the approval modal and writes the
+// response back on stdin via the state mutex. Closing state.done on
+// exit releases any responder goroutines still waiting on a reply.
 func readCodexStream(sc *bufio.Scanner, proc *providerProc, ch chan tea.Msg) {
 	defer close(ch)
+	if state, ok := proc.payload.(*codexState); ok && state != nil && state.done != nil {
+		defer close(state.done)
+	}
 	for sc.Scan() {
 		var ev map[string]any
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+			continue
+		}
+		if _, _, isRequest := codexServerRequest(ev); isRequest {
+			msgs, _ := handleCodexServerRequest(proc, ev)
+			for _, msg := range msgs {
+				ch <- msg
+			}
 			continue
 		}
 		for _, msg := range codexEventToMsgs(ev, proc) {
@@ -406,6 +488,8 @@ func codexNotification(method string, params any) map[string]any {
 
 // codexWriteJSON marshals msg as a single newline-terminated JSON frame —
 // the on-wire format codex app-server uses for stdio:// transport.
+// Direct callers must not share the pipe with another goroutine; prefer
+// codexWriteJSONLocked when a codexState mutex is available.
 func codexWriteJSON(w io.Writer, msg map[string]any) error {
 	b, err := json.Marshal(msg)
 	if err != nil {
@@ -413,4 +497,19 @@ func codexWriteJSON(w io.Writer, msg map[string]any) error {
 	}
 	_, err = w.Write(append(b, '\n'))
 	return err
+}
+
+// codexWriteJSONLocked writes a frame under the state mutex so the
+// Send path (user turns) and the stream-reader path (approval
+// responses) can never interleave bytes on the pipe.
+func codexWriteJSONLocked(state *codexState, msg map[string]any) error {
+	if state == nil {
+		return fmt.Errorf("codex: no state")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.stdin == nil {
+		return fmt.Errorf("codex: stdin closed")
+	}
+	return codexWriteJSON(state.stdin, msg)
 }

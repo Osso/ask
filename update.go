@@ -158,6 +158,15 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		// explicitly; prune reaps it on shutdown.
 		m.dismissCancelTurnConfirmIfIdle()
 		if m.mode == modeApproval {
+			// Unblock any codex approval responder still waiting on
+			// the user so the goroutine can exit cleanly. The channel
+			// is buffered, so a non-blocking send is safe.
+			if m.approvalReply != nil {
+				select {
+				case m.approvalReply <- approvalReply{allow: false}:
+				default:
+				}
+			}
 			m = m.clearApproval()
 		}
 		if msg.err != nil || stderrTail != "" {

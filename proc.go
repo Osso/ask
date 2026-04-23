@@ -12,6 +12,7 @@ func (m model) sessionArgs() ProviderSessionArgs {
 	return ProviderSessionArgs{
 		Cwd:                m.cwd,
 		MCPPort:            m.mcpPort,
+		TabID:              m.id,
 		Model:              m.providerModel,
 		Effort:             m.providerEffort,
 		OllamaHost:         m.ollamaHost,

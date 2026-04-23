@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -23,8 +25,11 @@ func TestCodexProvider_Metadata(t *testing.T) {
 	if !caps.Resume {
 		t.Error("Resume capability should be true so /resume works")
 	}
-	if caps.EffortPicker || caps.AskUserQuestionMCP || caps.PermissionPromptMCP {
+	if caps.AskUserQuestionMCP || caps.PermissionPromptMCP {
 		t.Errorf("deferred capabilities should stay false, got %+v", caps)
+	}
+	if !caps.EffortPicker {
+		t.Error("EffortPicker capability should be true so /effort works")
 	}
 	mp := p.ModelPicker()
 	if !mp.AllowCustom {
@@ -33,15 +38,20 @@ func TestCodexProvider_Metadata(t *testing.T) {
 	if len(mp.Options) == 0 {
 		t.Error("codex ModelPicker should expose at least a 'default' row")
 	}
-	if efforts := p.EffortOptions(); len(efforts) != 0 {
-		t.Errorf("EffortOptions should be empty, got %v", efforts)
+	eff := p.EffortOptions()
+	if len(eff) == 0 {
+		t.Error("EffortOptions should expose codex's ReasoningEffort enum")
 	}
-	// Slash commands are the only provider-specific entry for MVP.
+	wantEffortFirst := "default"
+	if len(eff) > 0 && eff[0] != wantEffortFirst {
+		t.Errorf("first effort option should be %q (UI sentinel), got %q", wantEffortFirst, eff[0])
+	}
+	// Slash commands available for codex.
 	names := map[string]bool{}
 	for _, s := range p.BaseSlashCommands() {
 		names[s.name] = true
 	}
-	for _, want := range []string{"/resume", "/new", "/clear", "/model"} {
+	for _, want := range []string{"/resume", "/new", "/clear", "/model", "/effort"} {
 		if !names[want] {
 			t.Errorf("BaseSlashCommands missing %q (got %v)", want, names)
 		}
@@ -70,7 +80,7 @@ func TestCodexProvider_ClaudeRemainsDefault(t *testing.T) {
 
 func TestCodexSend_WritesTurnStartRequest(t *testing.T) {
 	buf := &bufferCloser{Buffer: &bytes.Buffer{}}
-	state := &codexState{threadID: "t-1", nextID: codexTurnStartBaseID}
+	state := &codexState{threadID: "t-1", nextID: codexTurnStartBaseID, stdin: buf}
 	p := &providerProc{stdin: buf, payload: state}
 	var cp codexProvider
 	if err := cp.Send(p, "hello world", nil); err != nil {
@@ -111,7 +121,7 @@ func TestCodexSend_WritesTurnStartRequest(t *testing.T) {
 
 func TestCodexSend_IncrementsIDAcrossTurns(t *testing.T) {
 	buf := &bufferCloser{Buffer: &bytes.Buffer{}}
-	state := &codexState{threadID: "t-1", nextID: codexTurnStartBaseID}
+	state := &codexState{threadID: "t-1", nextID: codexTurnStartBaseID, stdin: buf}
 	p := &providerProc{stdin: buf, payload: state}
 	var cp codexProvider
 	for i := 0; i < 3; i++ {
@@ -151,14 +161,55 @@ func TestCodexSend_ErrorsWhenThreadIDEmpty(t *testing.T) {
 	}
 }
 
-func TestCodexSend_DropsAttachmentsForMVP(t *testing.T) {
-	// Images aren't in MVP scope but Send must not crash or blow up the
-	// wire frame when attachments are present — they're dropped silently.
+func TestCodexSend_ImageAttachmentsEmitDataURL(t *testing.T) {
+	// Attachments now flow through as codex ImageUserInput items with
+	// a base64 data URL. Text stays as the first entry so the turn
+	// reads correctly.
 	buf := &bufferCloser{Buffer: &bytes.Buffer{}}
-	state := &codexState{threadID: "t-1", nextID: codexTurnStartBaseID}
+	state := &codexState{threadID: "t-1", nextID: codexTurnStartBaseID, stdin: buf}
 	p := &providerProc{stdin: buf, payload: state}
 	var cp codexProvider
-	err := cp.Send(p, "look", []pendingAttachment{{data: []byte("png"), mime: "image/png"}})
+	raw := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	err := cp.Send(p, "look", []pendingAttachment{{data: raw, mime: "image/png"}})
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	var env map[string]any
+	_ = json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &env)
+	params := env["params"].(map[string]any)
+	input := params["input"].([]any)
+	if len(input) != 2 {
+		t.Fatalf("want 2 input items (text+image), got %d: %v", len(input), input)
+	}
+	first, _ := input[0].(map[string]any)
+	if first["type"] != "text" || first["text"] != "look" {
+		t.Errorf("input[0]=%v want text 'look'", first)
+	}
+	second, _ := input[1].(map[string]any)
+	if second["type"] != "image" {
+		t.Errorf("input[1].type=%v want image", second["type"])
+	}
+	url, _ := second["url"].(string)
+	wantPrefix := "data:image/png;base64,"
+	if !strings.HasPrefix(url, wantPrefix) {
+		t.Fatalf("image url missing data-URL prefix, got %q", url)
+	}
+	b64 := strings.TrimPrefix(url, wantPrefix)
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		t.Fatalf("image url payload not valid base64: %v", err)
+	}
+	if !bytes.Equal(decoded, raw) {
+		t.Errorf("image payload round-trip mismatch: got %v want %v", decoded, raw)
+	}
+}
+
+func TestCodexSend_EmptyAttachmentDataSkipped(t *testing.T) {
+	buf := &bufferCloser{Buffer: &bytes.Buffer{}}
+	state := &codexState{threadID: "t-1", nextID: codexTurnStartBaseID, stdin: buf}
+	p := &providerProc{stdin: buf, payload: state}
+	var cp codexProvider
+	err := cp.Send(p, "hi", []pendingAttachment{{mime: "image/png"}})
 	if err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -167,10 +218,51 @@ func TestCodexSend_DropsAttachmentsForMVP(t *testing.T) {
 	params := env["params"].(map[string]any)
 	input := params["input"].([]any)
 	if len(input) != 1 {
-		t.Fatalf("want 1 input item (text only), got %d: %v", len(input), input)
+		t.Errorf("empty attachment data should be skipped, got %v", input)
 	}
-	if first, _ := input[0].(map[string]any); first["text"] != "look" {
-		t.Errorf("text should pass through unchanged, got %v", first)
+}
+
+func TestCodexSend_PassesEffortWhenSet(t *testing.T) {
+	buf := &bufferCloser{Buffer: &bytes.Buffer{}}
+	state := &codexState{
+		threadID: "t-1",
+		nextID:   codexTurnStartBaseID,
+		stdin:    buf,
+		effort:   "high",
+	}
+	p := &providerProc{stdin: buf, payload: state}
+	var cp codexProvider
+	if err := cp.Send(p, "hi", nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	var env map[string]any
+	_ = json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &env)
+	params := env["params"].(map[string]any)
+	if params["effort"] != "high" {
+		t.Errorf("turn/start.effort=%v want high", params["effort"])
+	}
+}
+
+func TestCodexSend_OmitsEffortForDefault(t *testing.T) {
+	// The UI's "default" sentinel means "don't set effort" — codex
+	// will pick its own default when the field is absent.
+	buf := &bufferCloser{Buffer: &bytes.Buffer{}}
+	state := &codexState{
+		threadID: "t-1",
+		nextID:   codexTurnStartBaseID,
+		stdin:    buf,
+		effort:   "default",
+	}
+	p := &providerProc{stdin: buf, payload: state}
+	var cp codexProvider
+	if err := cp.Send(p, "hi", nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	var env map[string]any
+	_ = json.Unmarshal(bytes.TrimSpace(buf.Bytes()), &env)
+	params := env["params"].(map[string]any)
+	if _, present := params["effort"]; present {
+		t.Errorf("effort='default' must omit the field; got %v", params["effort"])
 	}
 }
 

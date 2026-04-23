@@ -162,6 +162,13 @@ func approvalSummary(tool string, input map[string]any, width int) string {
 		if a, _ := input["subagent_type"].(string); a != "" {
 			return approvalSummaryStyle.Render(truncate("subagent: "+a, width))
 		}
+	case "ApplyPatch", "FileChange":
+		if p, _ := input["file_path"].(string); p != "" {
+			return approvalSummaryStyle.Render(truncateFromLeft(p, width))
+		}
+		if reason, _ := input["reason"].(string); reason != "" {
+			return approvalSummaryStyle.Render(truncate(reason, width))
+		}
 	}
 	if len(input) == 0 {
 		return dimStyle.Render("(no arguments)")

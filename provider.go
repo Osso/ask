@@ -129,6 +129,7 @@ type ProviderPicker struct {
 type ProviderSessionArgs struct {
 	Cwd                string
 	MCPPort            int
+	TabID              int
 	Model              string
 	Effort             string
 	OllamaHost         string

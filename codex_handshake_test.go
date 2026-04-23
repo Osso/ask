@@ -184,6 +184,43 @@ func TestCodexHandshake_FreshSessionStillUsesThreadStart(t *testing.T) {
 	}
 }
 
+func TestCodexHandshake_SkipAllPermissionsSetsPolicyAndSandbox(t *testing.T) {
+	serverOut := `{"id":2,"result":{"thread":{"id":"new-id"}}}
+`
+	_, stdin, err := fakeHandshake(t, serverOut, ProviderSessionArgs{
+		Cwd:                "/work",
+		SkipAllPermissions: true,
+	})
+	if err != nil {
+		t.Fatalf("handshake err: %v", err)
+	}
+	frames := decodeFrames(t, stdin.Bytes())
+	params, _ := frames[2]["params"].(map[string]any)
+	if params["approvalPolicy"] != "never" {
+		t.Errorf("approvalPolicy=%v want 'never' under SkipAllPermissions", params["approvalPolicy"])
+	}
+	if params["sandbox"] != "danger-full-access" {
+		t.Errorf("sandbox=%v want 'danger-full-access' under SkipAllPermissions", params["sandbox"])
+	}
+}
+
+func TestCodexHandshake_WithoutSkipPermsLeavesPolicyUnset(t *testing.T) {
+	serverOut := `{"id":2,"result":{"thread":{"id":"new-id"}}}
+`
+	_, stdin, err := fakeHandshake(t, serverOut, ProviderSessionArgs{Cwd: "/work"})
+	if err != nil {
+		t.Fatalf("handshake err: %v", err)
+	}
+	frames := decodeFrames(t, stdin.Bytes())
+	params, _ := frames[2]["params"].(map[string]any)
+	if _, has := params["approvalPolicy"]; has {
+		t.Errorf("approvalPolicy must be absent by default, got %v", params["approvalPolicy"])
+	}
+	if _, has := params["sandbox"]; has {
+		t.Errorf("sandbox must be absent by default, got %v", params["sandbox"])
+	}
+}
+
 // decodeFrames splits the stdin byte stream at newlines and JSON-parses each
 // frame.
 func decodeFrames(t *testing.T, raw []byte) []map[string]any {
