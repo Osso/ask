@@ -72,6 +72,7 @@ func (m *model) startShellCmd(input string) tea.Cmd {
 	cmd := exec.Command(userShell(), "-c", wrapped)
 	// Own process group so we can SIGKILL children (e.g. sleep 100) on cancel.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = shellEnv()
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -178,6 +179,35 @@ func oneShellDone(tabID int, input, cwd string, err error) tea.Cmd {
 	return func() tea.Msg {
 		return shellBatchMsg{tabID: tabID, done: &shellDoneMsg{input: input, newCwd: cwd, err: err}}
 	}
+}
+
+// shellEnv returns a copy of os.Environ with Anthropic/Claude secret keys
+// stripped so they are not leaked into user shell commands.
+// prevent credential leak into untrusted shell subprocess
+func shellEnv() []string {
+	blocked := []string{
+		"ANTHROPIC_AUTH_TOKEN",
+		"ANTHROPIC_API_KEY",
+		"ANTHROPIC_BASE_URL",
+		"CLAUDE_APP_SECRET",
+		"MCP_TIMEOUT",
+	}
+	src := os.Environ()
+	out := make([]string, 0, len(src))
+	for _, e := range src {
+		key, _, _ := strings.Cut(e, "=")
+		skip := false
+		for _, b := range blocked {
+			if key == b {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // killShellProc SIGKILLs the whole process group so children outlive nothing.
