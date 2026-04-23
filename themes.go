@@ -48,6 +48,7 @@ var themeRegistry = []theme{
 	fighterTheme(),
 	hackerTheme(),
 	amberTheme(),
+	ayuTheme(),
 	loveTheme(),
 }
 
@@ -371,6 +372,30 @@ func amberTheme() theme {
 		tabActive:   lipgloss.Color("#FFC857"),
 		background:  lipgloss.Color("#0F0A00"),
 		foreground:  lipgloss.Color("#E0A44A"),
+	}
+}
+
+// ayuTheme mirrors Ayu Mirage, the dark-blue-grey palette with a warm amber
+// cursor. Sourced from the user's kitty current-theme.conf.
+func ayuTheme() theme {
+	return theme{
+		name:        "ayu",
+		accent:      lipgloss.Color("#FFCC66"),
+		accentAlt:   lipgloss.Color("#95E6CB"),
+		prompt:      lipgloss.Color("#DABAFA"),
+		promptDot:   lipgloss.Color("#90E1C6"),
+		success:     lipgloss.Color("#87D96C"),
+		errorFG:     lipgloss.Color("#F28779"),
+		warn:        lipgloss.Color("#FFD173"),
+		dim:         lipgloss.Color("#686868"),
+		muted:       lipgloss.Color("#C7C7C7"),
+		inverseFG:   lipgloss.Color("#CCCAC2"),
+		darkFG:      lipgloss.Color("#1F2430"),
+		rowHL:       lipgloss.Color("#242B38"),
+		scrollTrack: lipgloss.Color("#1F2430"),
+		tabActive:   lipgloss.Color("#FFCC66"),
+		background:  lipgloss.Color("#1F2430"),
+		foreground:  lipgloss.Color("#CCCAC2"),
 	}
 }
 
