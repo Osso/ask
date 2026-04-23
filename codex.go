@@ -36,14 +36,22 @@ func (codexProvider) Capabilities() ProviderCapabilities {
 	}
 }
 
-// ModelPicker exposes /model for codex. Real codex model ids (gpt-5,
-// o3, …) aren't hardcoded here to avoid guessing — the AllowCustom row
-// lets the user type whatever their account supports. A richer picker
-// can be layered on once we wire Model/list into the protocol.
+// ModelPicker exposes /model for codex. Options come from the cached
+// model/list response populated by ProbeInit; we seed "default" at
+// the top so the user always has a "let codex pick" option, and
+// AllowCustom stays on so typed model ids still flow through.
 func (codexProvider) ModelPicker() ProviderPicker {
+	opts := []string{"default"}
+	cfg, _ := loadConfig()
+	for _, id := range cfg.Codex.Models {
+		if id == "" {
+			continue
+		}
+		opts = append(opts, id)
+	}
 	return ProviderPicker{
 		Prompt:      "Select Codex model",
-		Options:     []string{"default"},
+		Options:     opts,
 		AllowCustom: true,
 	}
 }
@@ -65,7 +73,46 @@ func (codexProvider) BaseSlashCommands() []slashCmd {
 	}
 }
 
-func (codexProvider) ProbeInit(_ ProviderSessionArgs) tea.Cmd { return nil }
+// codexModelCacheTTL bounds how long a cached model/list response
+// stays fresh before ProbeInit re-queries the app-server. Model
+// releases are rare; a day-long window cuts per-tab subprocess forks
+// without making the picker noticeably stale.
+const codexModelCacheTTL = 24 * time.Hour
+
+// ProbeInit forks a short-lived codex app-server, initializes it,
+// calls model/list, and caches the returned model ids into
+// codexConfig.Models so the picker has them next time the user opens
+// /model or Ctrl+B. Failures are logged and swallowed: the picker
+// still works with its static "default" row + AllowCustom row, it
+// just won't know about newly-released models until the probe
+// succeeds. Re-queries are gated by codexModelCacheTTL so rapid tab
+// switches don't fork a fresh app-server every time.
+func (codexProvider) ProbeInit(_ ProviderSessionArgs) tea.Cmd {
+	return func() tea.Msg {
+		cfg, _ := loadConfig()
+		if len(cfg.Codex.Models) > 0 && cfg.Codex.ModelsFetchedAt > 0 {
+			age := time.Now().Unix() - cfg.Codex.ModelsFetchedAt
+			if age < int64(codexModelCacheTTL/time.Second) {
+				return nil
+			}
+		}
+		models, err := fetchCodexModels()
+		if err != nil {
+			debugLog("codex ProbeInit: %v", err)
+			return nil
+		}
+		if len(models) == 0 {
+			return nil
+		}
+		cfg, _ = loadConfig()
+		cfg.Codex.Models = models
+		cfg.Codex.ModelsFetchedAt = time.Now().Unix()
+		if err := saveConfig(cfg); err != nil {
+			debugLog("codex ProbeInit save: %v", err)
+		}
+		return nil
+	}
+}
 
 func (codexProvider) ListSessions(cwd string) ([]sessionEntry, error) {
 	return loadCodexSessions(cwd)
@@ -100,14 +147,15 @@ func (codexProvider) SaveSettings(s ProviderSettings) error {
 // readCodexStream exits so approval responder goroutines can abort
 // instead of blocking forever on a dead subprocess.
 type codexState struct {
-	mu        sync.Mutex
-	stdin     io.Writer
-	threadID  string
-	nextID    uint64
-	tabID     int
-	effort    string
-	skipPerms bool
-	done      chan struct{}
+	mu            sync.Mutex
+	stdin         io.Writer
+	threadID      string
+	currentTurnID string
+	nextID        uint64
+	tabID         int
+	effort        string
+	skipPerms     bool
+	done          chan struct{}
 }
 
 // codexCLIArgs returns the argv passed to the codex binary. Broken out so
@@ -266,6 +314,31 @@ func codexHandshake(stdin io.Writer, sc *bufio.Scanner, state *codexState, args 
 	return fmt.Errorf("codex exited before thread/start response")
 }
 
+// Interrupt sends `turn/interrupt` so codex winds the turn down
+// cleanly without dropping the thread. Returns handled=false when
+// we have no turn id to target — nothing in flight — so the caller
+// knows to just kill instead. Kept under the state mutex so the
+// write doesn't interleave with a concurrent Send or approval reply.
+func (codexProvider) Interrupt(p *providerProc) (bool, error) {
+	state, _ := p.payload.(*codexState)
+	if state == nil {
+		return false, nil
+	}
+	state.mu.Lock()
+	tid := state.threadID
+	turnID := state.currentTurnID
+	id := state.nextID
+	state.nextID++
+	state.mu.Unlock()
+	if tid == "" || turnID == "" {
+		return false, nil
+	}
+	return true, codexWriteJSONLocked(state, codexRequest(id, "turn/interrupt", map[string]any{
+		"threadId": tid,
+		"turnId":   turnID,
+	}))
+}
+
 func (codexProvider) Send(p *providerProc, text string, attachments []pendingAttachment) error {
 	state, _ := p.payload.(*codexState)
 	if state == nil {
@@ -373,6 +446,17 @@ func codexEventToMsgs(ev map[string]any, proc *providerProc) []tea.Msg {
 	}
 	switch method {
 	case "turn/started":
+		// Remember the active turn id so cancelTurn can send
+		// `turn/interrupt` cooperatively instead of killing the proc.
+		if state, _ := proc.payload.(*codexState); state != nil {
+			params, _ := ev["params"].(map[string]any)
+			turn, _ := params["turn"].(map[string]any)
+			if tid, _ := turn["id"].(string); tid != "" {
+				state.mu.Lock()
+				state.currentTurnID = tid
+				state.mu.Unlock()
+			}
+		}
 		return []tea.Msg{streamStatusMsg{status: "thinking…", proc: proc}}
 	case "item/started":
 		params, _ := ev["params"].(map[string]any)
@@ -384,10 +468,30 @@ func codexEventToMsgs(ev map[string]any, proc *providerProc) []tea.Msg {
 	case "item/completed":
 		params, _ := ev["params"].(map[string]any)
 		item, _ := params["item"].(map[string]any)
-		if itype, _ := item["type"].(string); itype == "agentMessage" {
+		itype, _ := item["type"].(string)
+		switch itype {
+		case "agentMessage":
 			if text, _ := item["text"].(string); text != "" {
 				return []tea.Msg{assistantTextMsg{text: text, proc: proc}}
 			}
+		case "fileChange":
+			// The UI toggle + quiet-mode guard lives on the consumer
+			// side (see toolDiffMsg handler in update.go) so codex
+			// gets the exact same `renderDiffs && !quietMode` gate
+			// claude already follows.
+			diffs := codexFileChanges(item)
+			if len(diffs) == 0 {
+				return nil
+			}
+			msgs := make([]tea.Msg, 0, len(diffs))
+			for _, d := range diffs {
+				msgs = append(msgs, toolDiffMsg{
+					filePath: d.Path,
+					hunks:    d.Hunks,
+					proc:     proc,
+				})
+			}
+			return msgs
 		}
 		return nil
 	case "turn/completed":
@@ -395,6 +499,15 @@ func codexEventToMsgs(ev map[string]any, proc *providerProc) []tea.Msg {
 		threadID, _ := params["threadId"].(string)
 		turn, _ := params["turn"].(map[string]any)
 		status, _ := turn["status"].(string)
+		// Clear the cached turn id so a stray Ctrl+C between turns
+		// doesn't send turn/interrupt for a turn that already ended
+		// (which would then sit forever waiting for a turn/completed
+		// that will never re-fire).
+		if state, _ := proc.payload.(*codexState); state != nil {
+			state.mu.Lock()
+			state.currentTurnID = ""
+			state.mu.Unlock()
+		}
 		res := providerResult{SessionID: threadID}
 		if status != "" && status != "completed" {
 			res.IsError = true
@@ -484,6 +597,115 @@ func codexNotification(method string, params any) map[string]any {
 		m["params"] = params
 	}
 	return m
+}
+
+// fetchCodexModels runs a short-lived codex app-server and asks it
+// for the current model list. Returns the non-hidden model ids,
+// ordered default-first when codex marks one isDefault=true so the
+// picker lands sensibly. A 15s ceiling bounds the worst case when
+// codex takes too long to initialize; anything longer falls back to
+// the cached list.
+func fetchCodexModels() ([]string, error) {
+	cmd := exec.Command("codex", codexCLIArgs(ProviderSessionArgs{})...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	cmd.Stderr = io.Discard
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	killed := false
+	cleanup := func() {
+		if killed {
+			return
+		}
+		killed = true
+		_ = stdin.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+	defer cleanup()
+
+	// Watchdog: kill the subprocess if it never sends the response
+	// line. The done channel closes on the happy path so the
+	// goroutine exits immediately instead of sleeping for the full
+	// timeout — same pattern StartSession uses for its handshake.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-done:
+		case <-time.After(codexHandshakeTimeout):
+			_ = cmd.Process.Kill()
+		}
+	}()
+
+	if err := codexWriteJSON(stdin, codexRequest(1, "initialize", map[string]any{
+		"clientInfo": map[string]any{"name": "ask", "version": "0.1"},
+	})); err != nil {
+		return nil, err
+	}
+	if err := codexWriteJSON(stdin, codexNotification("initialized", nil)); err != nil {
+		return nil, err
+	}
+	if err := codexWriteJSON(stdin, codexRequest(2, "model/list", map[string]any{})); err != nil {
+		return nil, err
+	}
+
+	sc := bufio.NewScanner(stdout)
+	sc.Buffer(make([]byte, 1<<20), 1<<22)
+	for sc.Scan() {
+		var ev map[string]any
+		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+			continue
+		}
+		idf, ok := ev["id"].(float64)
+		if !ok || int(idf) != 2 {
+			continue
+		}
+		if rpcErr, ok := ev["error"].(map[string]any); ok {
+			msg, _ := rpcErr["message"].(string)
+			return nil, fmt.Errorf("model/list rejected: %s", msg)
+		}
+		result, _ := ev["result"].(map[string]any)
+		data, _ := result["data"].([]any)
+		return codexParseModelList(data), nil
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	return nil, fmt.Errorf("codex exited before model/list response")
+}
+
+// codexParseModelList pulls model ids out of a /model/list data
+// array. Hidden models are skipped; the default model (isDefault=true)
+// moves to the front so the picker opens on it.
+func codexParseModelList(data []any) []string {
+	var defaults, rest []string
+	for _, m := range data {
+		mm, _ := m.(map[string]any)
+		if mm == nil {
+			continue
+		}
+		if hidden, _ := mm["hidden"].(bool); hidden {
+			continue
+		}
+		id, _ := mm["id"].(string)
+		if id == "" {
+			continue
+		}
+		if isDefault, _ := mm["isDefault"].(bool); isDefault {
+			defaults = append(defaults, id)
+			continue
+		}
+		rest = append(rest, id)
+	}
+	return append(defaults, rest...)
 }
 
 // codexWriteJSON marshals msg as a single newline-terminated JSON frame —

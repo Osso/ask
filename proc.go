@@ -2,9 +2,17 @@ package main
 
 import (
 	"os"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+// cancelFallbackTimeout bounds how long cancelTurn will wait for a
+// cooperative cancel to take effect before falling back to killProc.
+// Codex usually wraps up in well under a second after turn/interrupt;
+// this ceiling exists purely to prevent the UI getting stuck if the
+// provider's stream never emits turn/completed.
+const cancelFallbackTimeout = 10 * time.Second
 
 // sessionArgs bundles the model's current state into the provider-shaped
 // arg struct used by Provider.StartSession / ProbeInit.
@@ -120,15 +128,45 @@ func (m model) sendToProvider(line string) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// cancelTurn kills the active provider process and reports to the user.
-func (m model) cancelTurn() model {
+// cancelTurn asks the provider to cancel cooperatively (turn/interrupt
+// for codex). Providers that don't support that — claude — return
+// handled=false and we fall back to killing the subprocess, matching
+// the old behavior. On a cooperative cancel we keep the proc alive so
+// the thread stays resumable; the UI goes idle when the provider
+// emits its own turn-completed notification.
+//
+// Returns a tea.Cmd because the cooperative path arms a fallback
+// timer — if the turn hasn't wound down by then, cancelWatchdogMsg
+// triggers a killProc so the UI never sticks in "cancelling…".
+func (m model) cancelTurn() (model, tea.Cmd) {
 	if !m.busy && m.proc == nil {
-		return m
+		return m, nil
 	}
 	m.flushTurnBuffer()
+	if m.provider != nil && m.proc != nil {
+		handled, err := m.provider.Interrupt(m.proc)
+		if err != nil {
+			debugLog("provider.Interrupt err: %v", err)
+		}
+		if handled && err == nil {
+			m.status = "cancelling…"
+			m.appendHistory(outputStyle.Render(dimStyle.Render("✗ cancelling…")))
+			return m, cancelWatchdogCmd(m.proc)
+		}
+	}
 	m.killProc()
 	m.appendHistory(outputStyle.Render(dimStyle.Render("✗ cancelled")))
-	return m
+	return m, nil
+}
+
+// cancelWatchdogCmd fires a cancelWatchdogMsg after cancelFallbackTimeout
+// tagged with the proc that was live at cancel time. The Update
+// handler drops the message if the proc is gone (already reaped) or
+// no longer busy (the cooperative cancel landed normally).
+func cancelWatchdogCmd(p *providerProc) tea.Cmd {
+	return tea.Tick(cancelFallbackTimeout, func(time.Time) tea.Msg {
+		return cancelWatchdogMsg{proc: p}
+	})
 }
 
 func (m *model) flushTurnBuffer() {

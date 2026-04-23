@@ -30,6 +30,7 @@ type fakeProvider struct {
 	probeInitFn    func(ProviderSessionArgs) tea.Cmd
 	startSessionFn func(ProviderSessionArgs) (*providerProc, chan tea.Msg, error)
 	sendFn         func(*providerProc, string, []pendingAttachment) error
+	interruptFn    func(*providerProc) (bool, error)
 	listSessionsFn func(string) ([]sessionEntry, error)
 	loadHistoryFn  func(string, HistoryOpts) ([]historyEntry, error)
 	loadSettingsFn func() ProviderSettings
@@ -86,6 +87,13 @@ func (f *fakeProvider) StartSession(args ProviderSessionArgs) (*providerProc, ch
 	ch := make(chan tea.Msg, 32)
 	proc := &providerProc{stdin: &bufferCloser{Buffer: &bytes.Buffer{}}}
 	return proc, ch, nil
+}
+
+func (f *fakeProvider) Interrupt(p *providerProc) (bool, error) {
+	if f.interruptFn != nil {
+		return f.interruptFn(p)
+	}
+	return false, nil
 }
 
 func (f *fakeProvider) Send(p *providerProc, text string, att []pendingAttachment) error {

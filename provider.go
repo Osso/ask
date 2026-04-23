@@ -55,6 +55,14 @@ type Provider interface {
 	// running session's stdin.
 	Send(p *providerProc, text string, attachments []pendingAttachment) error
 
+	// Interrupt cancels the in-flight turn cooperatively. Returns
+	// handled=true when the provider accepted the cancel (the app
+	// should keep the proc alive and wait for turn/completed) and
+	// handled=false when the provider has no cancel protocol and the
+	// caller should fall back to killing the subprocess. Errors
+	// always push the caller to the kill fallback.
+	Interrupt(p *providerProc) (handled bool, err error)
+
 	// ListSessions enumerates prior sessions rooted at cwd. Backs
 	// /resume. Empty slice + nil error is fine when the provider has no
 	// persisted history.

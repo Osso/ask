@@ -191,7 +191,16 @@ func readCodexSessionEntry(path string) (sessionEntry, bool) {
 // loadCodexHistory parses a rollout into the same historyEntry shape
 // claude uses. User preludes and developer-role items are skipped so
 // the replay looks like a conversation.
-func loadCodexHistory(sessionID string, _ HistoryOpts) ([]historyEntry, error) {
+//
+// Quiet mode collapses consecutive assistant messages into a single
+// entry that keeps the most recent text, matching claude's behavior.
+// Each user message resets the collapse so separate turns stay
+// separate. Diff rendering from the rollout jsonl isn't implemented
+// yet — codex records file-change events under a `fileChange`
+// response_item (and related event_msg subtypes) that we don't
+// surface here. Real-time diffs still render during a new turn via
+// the wire-stream handler; this is a history-replay limitation.
+func loadCodexHistory(sessionID string, opts HistoryOpts) ([]historyEntry, error) {
 	path, err := findCodexRollout(sessionID)
 	if err != nil {
 		return nil, err
@@ -204,6 +213,7 @@ func loadCodexHistory(sessionID string, _ HistoryOpts) ([]historyEntry, error) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 1<<20), 1<<22)
 	var entries []historyEntry
+	lastAssistantIdx := -1
 	for sc.Scan() {
 		var rec struct {
 			Type    string          `json:"type"`
@@ -232,8 +242,15 @@ func loadCodexHistory(sessionID string, _ HistoryOpts) ([]historyEntry, error) {
 				continue
 			}
 			entries = append(entries, historyEntry{kind: histUser, text: txt})
+			lastAssistantIdx = -1
 		case "assistant":
+			if opts.QuietMode && lastAssistantIdx >= 0 {
+				entries[lastAssistantIdx].text = txt
+				entries[lastAssistantIdx].rendered = ""
+				continue
+			}
 			entries = append(entries, historyEntry{kind: histResponse, text: txt})
+			lastAssistantIdx = len(entries) - 1
 		}
 	}
 	return entries, nil

@@ -70,6 +70,15 @@ type bgTaskEndedMsg struct {
 	proc   *providerProc
 }
 
+// cancelWatchdogMsg fires some seconds after a cooperative cancel
+// (Provider.Interrupt reported handled=true). If the same proc is
+// still busy when it arrives, the UI treats the interrupt as lost
+// and kills the subprocess as a fallback so the user never gets
+// stuck staring at "cancelling…" forever.
+type cancelWatchdogMsg struct {
+	proc *providerProc
+}
+
 type diffHunk struct {
 	oldStart int
 	oldLines int
@@ -234,9 +243,16 @@ type model struct {
 	// picks a model from that provider's picker; Enter at Level 1
 	// applies both to the current tab and saves cfg.Provider as the new
 	// default. Esc at Level 1 pops to Level 0; Esc at Level 0 cancels.
-	providerSwitchLevel    int
-	providerSwitchProvIdx  int
-	providerSwitchModelIdx int
+	// When the cursor lands on the trailing "Enter your own" row and
+	// the user hits Enter, providerSwitchCustomActive flips true and
+	// providerSwitchCustomText starts collecting keystrokes. Enter
+	// then applies the typed value; Esc pops back to the list without
+	// losing what was typed so far.
+	providerSwitchLevel        int
+	providerSwitchProvIdx      int
+	providerSwitchModelIdx     int
+	providerSwitchCustomActive bool
+	providerSwitchCustomText   string
 
 	themeName string
 

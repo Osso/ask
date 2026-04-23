@@ -136,6 +136,21 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		m.providerSlashCmds = msg.slashCmds
 		return m, persistSlashCmdsCmd(m.provider, msg.slashCmds)
 
+	case cancelWatchdogMsg:
+		// Cooperative cancel never completed within the grace window.
+		// If the same proc is still running and still busy, kill it
+		// as a fallback so the UI doesn't sit in "cancelling…"
+		// forever. If the proc has already exited (nil m.proc) or
+		// the turn wound down normally (not busy), we silently drop.
+		if msg.proc != m.proc || !m.busy || m.proc == nil {
+			return m, nil
+		}
+		debugLog("cancel watchdog fired; force-killing proc")
+		m.killProc()
+		m.appendHistory(outputStyle.Render(dimStyle.Render(
+			"✗ cancelled (force-killed after interrupt timed out)")))
+		return m, nil
+
 	case providerExitedMsg:
 		if msg.proc != m.proc {
 			return m, nil
@@ -804,7 +819,8 @@ func (m model) updateCancelTurnConfirm(msg tea.KeyPressMsg) (tea.Model, tea.Cmd)
 func (m model) applyCancelTurnConfirm() (tea.Model, tea.Cmd) {
 	m.cancelTurnConfirming = false
 	m.cancelTurnChoice = 0
-	return m.cancelTurn(), nil
+	mm, cmd := m.cancelTurn()
+	return mm, cmd
 }
 
 func (m *model) dismissCancelTurnConfirmIfIdle() {

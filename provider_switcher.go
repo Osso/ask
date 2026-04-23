@@ -26,18 +26,26 @@ func switcherProviderOptions() []string {
 }
 
 // switcherModelOptions returns the model picker options for the
-// provider at provIdx. "Enter your own" is deliberately omitted — the
-// quick switcher has no text-input mode yet, so exposing that row
-// would silently no-op on Enter. /model still handles custom text
-// through the ask-question flow; once we add a text input here, this
-// function can append the row and applyProviderSwitch can prompt.
+// provider at provIdx. When the provider advertises AllowCustom, the
+// trailing "Enter your own" row is appended — selecting it flips the
+// switcher into a text-input sub-mode (providerSwitchCustomActive)
+// where typing collects a custom model id before Enter applies it.
 func switcherModelOptions(provIdx int) []string {
 	if provIdx < 0 || provIdx >= len(providerRegistry) {
 		return nil
 	}
 	picker := providerRegistry[provIdx].ModelPicker()
-	return append([]string{}, picker.Options...)
+	out := append([]string{}, picker.Options...)
+	if picker.AllowCustom {
+		out = append(out, switcherCustomRowLabel)
+	}
+	return out
 }
+
+// switcherCustomRowLabel is the single-source-of-truth label for the
+// "Enter your own" row; stored once so the picker renderer and the
+// cursor-detection logic stay in sync.
+const switcherCustomRowLabel = "Enter your own"
 
 // openProviderSwitch enters the quick switcher. Cursor starts on the
 // current provider; Level 0 is always where we enter.
@@ -46,6 +54,8 @@ func (m model) openProviderSwitch() model {
 	m.providerSwitchLevel = 0
 	m.providerSwitchProvIdx = indexOfProvider(m.provider)
 	m.providerSwitchModelIdx = 0
+	m.providerSwitchCustomActive = false
+	m.providerSwitchCustomText = ""
 	return m
 }
 
@@ -55,6 +65,8 @@ func (m model) closeProviderSwitch() model {
 	m.providerSwitchLevel = 0
 	m.providerSwitchProvIdx = 0
 	m.providerSwitchModelIdx = 0
+	m.providerSwitchCustomActive = false
+	m.providerSwitchCustomText = ""
 	return m
 }
 
@@ -145,6 +157,9 @@ func seedModelCursor(provIdx int, opts []string) int {
 }
 
 func (m model) updateProviderSwitchLevel1(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.providerSwitchCustomActive {
+		return m.updateProviderSwitchCustom(msg)
+	}
 	opts := switcherModelOptions(m.providerSwitchProvIdx)
 	switch {
 	case msg.Mod == tea.ModCtrl && msg.Code == 'c':
@@ -167,8 +182,45 @@ func (m model) updateProviderSwitchLevel1(msg tea.KeyPressMsg) (tea.Model, tea.C
 		if m.providerSwitchModelIdx < 0 || m.providerSwitchModelIdx >= len(opts) {
 			return m, nil
 		}
-		picked := switcherModelFromLabel(opts[m.providerSwitchModelIdx])
+		label := opts[m.providerSwitchModelIdx]
+		if label == switcherCustomRowLabel {
+			m.providerSwitchCustomActive = true
+			m.providerSwitchCustomText = providerRegistry[m.providerSwitchProvIdx].LoadSettings().Model
+			return m, nil
+		}
+		return m.applyProviderSwitch(switcherModelFromLabel(label))
+	}
+	return m, nil
+}
+
+// updateProviderSwitchCustom handles typing a custom model id once
+// the user has selected the "Enter your own" row. Enter applies the
+// typed value (when non-empty); Esc pops back to the list while
+// preserving typed text so a misclick doesn't lose it.
+func (m model) updateProviderSwitchCustom(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Mod == tea.ModCtrl && msg.Code == 'c':
+		return m.closeProviderSwitch(), nil
+	case msg.Code == tea.KeyEsc:
+		m.providerSwitchCustomActive = false
+		return m, nil
+	case msg.Code == tea.KeyBackspace:
+		if m.providerSwitchCustomText != "" {
+			r := []rune(m.providerSwitchCustomText)
+			m.providerSwitchCustomText = string(r[:len(r)-1])
+		}
+		return m, nil
+	case msg.Code == tea.KeyEnter:
+		picked := strings.TrimSpace(m.providerSwitchCustomText)
+		if picked == "" {
+			// Empty submit is a no-op so users can't accidentally
+			// clear their model on a blank press.
+			return m, nil
+		}
 		return m.applyProviderSwitch(picked)
+	}
+	if msg.Text != "" && msg.Mod&^tea.ModShift == 0 {
+		m.providerSwitchCustomText += msg.Text
 	}
 	return m, nil
 }
@@ -282,17 +334,23 @@ func (m model) viewProviderSwitch() string {
 			}
 		}
 		innerW += 4
-		if innerW < 24 {
-			innerW = 24
+		if innerW < 32 {
+			innerW = 32
 		}
-		rows = renderSwitcherRows(opts, m.providerSwitchModelIdx, innerW)
+		if m.providerSwitchCustomActive {
+			rows = []string{renderSwitcherCustomRow(m.providerSwitchCustomText, innerW)}
+		} else {
+			rows = renderSwitcherRows(opts, m.providerSwitchModelIdx, innerW)
+		}
 	}
 
 	var helpText string
-	switch m.providerSwitchLevel {
-	case 0:
+	switch {
+	case m.providerSwitchLevel == 1 && m.providerSwitchCustomActive:
+		helpText = "type model id · enter apply · esc back"
+	case m.providerSwitchLevel == 0:
 		helpText = "↑↓ navigate · enter pick model · esc cancel"
-	case 1:
+	case m.providerSwitchLevel == 1:
 		helpText = "↑↓ navigate · enter switch · esc back"
 	}
 	help := themePickerHelpStyle.Render(helpText)
@@ -305,6 +363,27 @@ func (m model) viewProviderSwitch() string {
 		help,
 	}, "\n")
 	return themePickerBoxStyle.Render(body)
+}
+
+// renderSwitcherCustomRow draws the typing surface that replaces the
+// option list when the user lands on "Enter your own". A trailing
+// caret shows where input lands; empty text renders a dim
+// placeholder so the row doesn't collapse to just the cursor.
+func renderSwitcherCustomRow(text string, width int) string {
+	label := "▸ "
+	caret := askCaretStyle.Render("▏")
+	body := text
+	if body == "" {
+		body = askPlaceholder.Render("type model id") + caret
+	} else {
+		body = body + caret
+	}
+	line := label + body
+	pad := width - lipgloss.Width(line)
+	if pad > 0 {
+		line += strings.Repeat(" ", pad)
+	}
+	return themePickerRowStyle.Render(line)
 }
 
 func renderSwitcherRows(opts []string, cursor, width int) []string {

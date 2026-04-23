@@ -154,6 +154,11 @@ func (claudeProvider) StartSession(args ProviderSessionArgs) (*providerProc, cha
 	return proc, ch, nil
 }
 
+// Interrupt is unimplemented for claude — stream-json has no cancel
+// frame, so the app falls back to killProc. Returning handled=false
+// signals that fallback explicitly.
+func (claudeProvider) Interrupt(_ *providerProc) (bool, error) { return false, nil }
+
 func (claudeProvider) Send(p *providerProc, text string, attachments []pendingAttachment) error {
 	payload := map[string]any{
 		"type": "user",

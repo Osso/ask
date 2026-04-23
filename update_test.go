@@ -379,7 +379,7 @@ func TestHandleCommand_ProviderSlashForwardsThroughSend(t *testing.T) {
 
 func TestCancelTurn_DoesNothingWhenIdle(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
-	out := m.cancelTurn()
+	out, _ := m.cancelTurn()
 	if len(out.history) != 0 {
 		t.Errorf("idle cancel should not append history; got %+v", out.history)
 	}
@@ -389,7 +389,7 @@ func TestCancelTurn_KillsProcAndAppendsMarker(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}
 	m.busy = true
-	out := m.cancelTurn()
+	out, _ := m.cancelTurn()
 	if out.proc != nil {
 		t.Errorf("proc should be killed")
 	}

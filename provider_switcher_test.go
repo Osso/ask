@@ -315,20 +315,30 @@ func TestSwitcherProviderOptions_OrderMatchesRegistry(t *testing.T) {
 	}
 }
 
-func TestSwitcherModelOptions_HidesEnterYourOwnForNow(t *testing.T) {
-	// The quick switcher has no custom-text input yet, so even
-	// providers that set AllowCustom shouldn't leak the row. /model
-	// (the full picker) still exposes it via the ask-question flow.
+func TestSwitcherModelOptions_AppendsEnterYourOwnWhenAllowed(t *testing.T) {
 	p := newFakeProvider()
 	p.modelPicker = ProviderPicker{Options: []string{"a", "b"}, AllowCustom: true}
 	withRegisteredProviders(t, p)
 	opts := switcherModelOptions(0)
+	if len(opts) != 3 {
+		t.Fatalf("AllowCustom must append 'Enter your own' row, got %v", opts)
+	}
+	if opts[len(opts)-1] != switcherCustomRowLabel {
+		t.Errorf("trailing row should be the custom label, got %q", opts[len(opts)-1])
+	}
+}
+
+func TestSwitcherModelOptions_OmitsEnterYourOwnWhenNotAllowed(t *testing.T) {
+	p := newFakeProvider()
+	p.modelPicker = ProviderPicker{Options: []string{"a", "b"}, AllowCustom: false}
+	withRegisteredProviders(t, p)
+	opts := switcherModelOptions(0)
 	if len(opts) != 2 {
-		t.Errorf("switcher should hide Enter your own until text input ships; got %v", opts)
+		t.Errorf("non-custom picker must not expose the row, got %v", opts)
 	}
 	for _, o := range opts {
-		if strings.EqualFold(o, "Enter your own") {
-			t.Errorf("unexpected Enter your own row: %v", opts)
+		if o == switcherCustomRowLabel {
+			t.Errorf("unexpected custom row: %v", opts)
 		}
 	}
 }

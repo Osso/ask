@@ -193,6 +193,77 @@ func TestCodex_LoadHistory_SessionNotFound(t *testing.T) {
 	}
 }
 
+func TestCodex_LoadHistory_QuietModeCollapsesAssistants(t *testing.T) {
+	// Quiet mode should keep only the most recent assistant message
+	// per user turn — exactly the behavior claude's loader uses.
+	home := isolateHome(t)
+	cwd := t.TempDir()
+	writeCodexRollout(t, home, "quiet-sess", cwd, []string{
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"q"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"second"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final"}]}`,
+	}, time.Now())
+
+	entries, err := loadCodexHistory("quiet-sess", HistoryOpts{QuietMode: true})
+	if err != nil {
+		t.Fatalf("loadCodexHistory: %v", err)
+	}
+	// Want: one user entry, one collapsed assistant entry showing only
+	// the last text.
+	if len(entries) != 2 {
+		t.Fatalf("quiet-mode replay should collapse assistants; got %d: %+v", len(entries), entries)
+	}
+	if entries[0].kind != histUser || entries[0].text != "q" {
+		t.Errorf("entry[0]=%+v want user 'q'", entries[0])
+	}
+	if entries[1].kind != histResponse || entries[1].text != "final" {
+		t.Errorf("entry[1]=%+v want response 'final' (last assistant only)", entries[1])
+	}
+}
+
+func TestCodex_LoadHistory_QuietModeResetsOnNewUserTurn(t *testing.T) {
+	// Quiet mode collapses within a turn but starts fresh on each
+	// new user message — so two separate user turns produce two
+	// separate final-assistant entries.
+	home := isolateHome(t)
+	cwd := t.TempDir()
+	writeCodexRollout(t, home, "quiet-two", cwd, []string{
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"u1"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a1a"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a1b"}]}`,
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"u2"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a2a"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"a2b"}]}`,
+	}, time.Now())
+
+	entries, _ := loadCodexHistory("quiet-two", HistoryOpts{QuietMode: true})
+	if len(entries) != 4 {
+		t.Fatalf("want 4 entries (u a u a), got %d: %+v", len(entries), entries)
+	}
+	if entries[1].text != "a1b" {
+		t.Errorf("turn 1 collapsed text=%q want a1b", entries[1].text)
+	}
+	if entries[3].text != "a2b" {
+		t.Errorf("turn 2 collapsed text=%q want a2b", entries[3].text)
+	}
+}
+
+func TestCodex_LoadHistory_NonQuietKeepsEveryAssistant(t *testing.T) {
+	home := isolateHome(t)
+	cwd := t.TempDir()
+	writeCodexRollout(t, home, "verbose-sess", cwd, []string{
+		`{"type":"message","role":"user","content":[{"type":"input_text","text":"q"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"first"}]}`,
+		`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"second"}]}`,
+	}, time.Now())
+
+	entries, _ := loadCodexHistory("verbose-sess", HistoryOpts{QuietMode: false})
+	if len(entries) != 3 {
+		t.Fatalf("non-quiet must preserve every message, got %d: %+v", len(entries), entries)
+	}
+}
+
 func TestCodex_FindRollout_RejectsUnsafeIDs(t *testing.T) {
 	// Defense-in-depth: even though WalkDir already confines the scan
 	// to ~/.codex/sessions/ and we only match d.Name(), a sessionID
