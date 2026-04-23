@@ -93,7 +93,7 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.dispatchByTabID(m.tabID, msg)
 
 	default:
-		// proc-tagged messages (streamStatusMsg, claudeDoneMsg, etc.) and
+		// proc-tagged messages (streamStatusMsg, providerDoneMsg, etc.) and
 		// other broadcast candidates: let every tab filter by its own proc.
 		return a.broadcast(msg)
 	}

@@ -70,10 +70,18 @@ func (m model) clearAsk() model {
 }
 
 func (m model) startModelPicker() model {
-	options := []string{"default", "haiku", "sonnet", "sonnet[1m]", "opus", "opus[1m]", ollamaModelOption, "Enter your own"}
+	picker := m.provider.ModelPicker()
+	options := append([]string{}, picker.Options...)
+	if picker.AllowCustom {
+		options = append(options, "Enter your own")
+	}
+	prompt := picker.Prompt
+	if prompt == "" {
+		prompt = "Select " + m.provider.DisplayName() + " model"
+	}
 	m = m.startAsk([]question{{
 		kind:     qPickOne,
-		prompt:   "Select Claude model",
+		prompt:   prompt,
 		options:  options,
 		diagrams: make([]string, len(options)),
 	}})
@@ -81,26 +89,26 @@ func (m model) startModelPicker() model {
 
 	selected := 0
 	switch {
-	case strings.EqualFold(m.claudeModel, "ollama"):
+	case strings.EqualFold(m.providerModel, "ollama"):
 		for i, opt := range options {
 			if opt == ollamaModelOption {
 				selected = i
 				break
 			}
 		}
-	case m.claudeModel != "":
+	case m.providerModel != "":
 		selected = len(options) - 1
 		for i, opt := range options {
 			if strings.EqualFold(opt, "Enter your own") || opt == ollamaModelOption {
 				continue
 			}
-			if strings.EqualFold(opt, m.claudeModel) {
+			if strings.EqualFold(opt, m.providerModel) {
 				selected = i
 				break
 			}
 		}
 		if selected == len(options)-1 {
-			m.askAnswers[0].custom = m.claudeModel
+			m.askAnswers[0].custom = m.providerModel
 		}
 	}
 	m.askAnswers[0].picks[selected] = true
@@ -132,21 +140,22 @@ func (m model) applyModelPick() (model, tea.Cmd) {
 		picked = ""
 	}
 	m = m.clearAsk()
-	if picked == m.claudeModel {
+	if picked == m.providerModel {
 		return m, nil
 	}
 	m.killProc()
-	m.claudeModel = picked
-	cfg, _ := loadConfig()
-	cfg.Claude.Model = picked
-	if err := saveConfig(cfg); err != nil {
-		debugLog("saveConfig err: %v", err)
+	m.providerModel = picked
+	settings := m.provider.LoadSettings()
+	settings.Model = picked
+	if err := m.provider.SaveSettings(settings); err != nil {
+		debugLog("SaveSettings err: %v", err)
 	}
 	var msg string
 	switch picked {
 	case "":
-		msg = "✓ model cleared (using claude default)"
+		msg = "✓ model cleared (using " + m.provider.DisplayName() + " default)"
 	case "ollama":
+		cfg, _ := loadConfig()
 		msg = fmt.Sprintf("✓ model set to ollama (%s · %s)", cfg.Claude.Ollama.Host, cfg.Claude.Ollama.Model)
 	default:
 		msg = "✓ model set to " + picked
@@ -155,12 +164,12 @@ func (m model) applyModelPick() (model, tea.Cmd) {
 	return m, nil
 }
 
-var effortOptions = []string{"default", "low", "medium", "high", "xhigh", "max"}
-
 func (m model) startEffortPicker() model {
+	effortOptions := m.provider.EffortOptions()
+	prompt := "Select " + m.provider.DisplayName() + " reasoning effort"
 	m = m.startAsk([]question{{
 		kind:     qPickOne,
-		prompt:   "Select Claude reasoning effort",
+		prompt:   prompt,
 		options:  effortOptions,
 		diagrams: make([]string, len(effortOptions)),
 	}})
@@ -168,7 +177,7 @@ func (m model) startEffortPicker() model {
 
 	selected := 0
 	for i, opt := range effortOptions {
-		if strings.EqualFold(opt, m.claudeEffort) {
+		if strings.EqualFold(opt, m.providerEffort) {
 			selected = i
 			break
 		}
@@ -194,17 +203,17 @@ func (m model) applyEffortPick() (model, tea.Cmd) {
 		picked = ""
 	}
 	m = m.clearAsk()
-	if picked == m.claudeEffort {
+	if picked == m.providerEffort {
 		return m, nil
 	}
 	m.killProc()
-	m.claudeEffort = picked
-	cfg, _ := loadConfig()
-	cfg.Claude.Effort = picked
-	if err := saveConfig(cfg); err != nil {
-		debugLog("saveConfig err: %v", err)
+	m.providerEffort = picked
+	settings := m.provider.LoadSettings()
+	settings.Effort = picked
+	if err := m.provider.SaveSettings(settings); err != nil {
+		debugLog("SaveSettings err: %v", err)
 	}
-	msg := "✓ effort cleared (using claude default)"
+	msg := "✓ effort cleared (using " + m.provider.DisplayName() + " default)"
 	if picked != "" {
 		msg = "✓ effort set to " + picked
 	}

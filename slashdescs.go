@@ -7,11 +7,11 @@ import (
 	"strings"
 )
 
-func enrichSlashCommands(names []string) []claudeSlashEntry {
+func enrichSlashCommands(names []string) []providerSlashEntry {
 	index := slashCmdDescriptions()
-	out := make([]claudeSlashEntry, len(names))
+	out := make([]providerSlashEntry, len(names))
 	for i, n := range names {
-		out[i] = claudeSlashEntry{Name: n, Description: index[n]}
+		out[i] = providerSlashEntry{Name: n, Description: index[n]}
 	}
 	return out
 }

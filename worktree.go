@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // askLockPrefix tags worktree locks ask owns. The suffix is the ask PID so
@@ -229,6 +230,53 @@ func lockHeldByLiveOtherAsk(reason string) bool {
 		return false
 	}
 	return syscall.Kill(pid, 0) == nil
+}
+
+// createExternalWorktree creates a fresh `.claude/worktrees/<name>`
+// directory and matching `worktree-<name>` branch, then locks the
+// worktree as ours. Used by providers without a native --worktree flag
+// (anything ask drives externally, e.g., codex). Returns the absolute
+// path for the subprocess to run in and the display name for the chip.
+//
+// No-op when we're not inside a git checkout; the caller is expected
+// to guard on inGitCheckout() before calling. Errors surface git's
+// combined stderr when `git worktree add` fails (e.g., dirty tree).
+func createExternalWorktree() (path, name string, err error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", "", err
+	}
+	name = newExternalWorktreeName(cwd)
+	path = filepath.Join(cwd, ".claude", "worktrees", name)
+	if err := os.MkdirAll(filepath.Join(cwd, ".claude", "worktrees"), 0o755); err != nil {
+		return "", "", fmt.Errorf("prepare worktrees dir: %w", err)
+	}
+	branch := "worktree-" + name
+	add := exec.Command("git", "worktree", "add", "-b", branch, path)
+	add.Dir = cwd
+	if out, err := add.CombinedOutput(); err != nil {
+		return "", "", fmt.Errorf("git worktree add %s: %w\n%s",
+			path, err, bytes.TrimSpace(out))
+	}
+	lockWorktree(name)
+	debugLog("external worktree created at %s on branch %s", path, branch)
+	return path, name, nil
+}
+
+// newExternalWorktreeName returns a fresh worktree directory name that
+// doesn't collide with an existing `.claude/worktrees/<name>` entry
+// under cwd. Format is `ask-<ms-timestamp>` with a counter suffix on
+// the exceedingly rare case two sessions start the same millisecond.
+func newExternalWorktreeName(cwd string) string {
+	base := fmt.Sprintf("ask-%d", time.Now().UnixNano()/int64(time.Millisecond))
+	parent := filepath.Join(cwd, ".claude", "worktrees")
+	name := base
+	for i := 1; ; i++ {
+		if _, err := os.Stat(filepath.Join(parent, name)); os.IsNotExist(err) {
+			return name
+		}
+		name = fmt.Sprintf("%s-%d", base, i)
+	}
 }
 
 // ensureResumeWorktree recreates a `.claude/worktrees/<name>` directory that

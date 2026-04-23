@@ -50,7 +50,8 @@ func (m model) refreshHistoryCmd() tea.Cmd {
 	if m.busy || m.sessionID == "" {
 		return nil
 	}
-	return loadHistoryCmd(m.sessionID, m.renderDiffs, m.quietMode, true)
+	return loadHistoryCmd(m.provider, m.sessionID,
+		HistoryOpts{RenderDiffs: m.renderDiffs, QuietMode: m.quietMode}, true)
 }
 
 func (m model) startConfigModal() model {

@@ -69,18 +69,36 @@ func newTab(id int, cfg askConfig) (*model, error) {
 	vp.SoftWrap = true
 	vp.MouseWheelEnabled = true
 
-	bridge, err := newMCPBridge(id)
-	if err != nil {
-		return nil, err
-	}
-
 	cwd, _ := os.Getwd()
+
+	provider := providerByID(cfg.Provider)
+	if provider == nil {
+		return nil, fmt.Errorf("no provider registered")
+	}
+	settings := provider.LoadSettings()
+
+	// MCP bridge is only needed when the provider lacks native
+	// AskUserQuestion or permission-prompt support. Providers that
+	// model both in their own protocol (future codex, gemini) skip
+	// the TCP listener entirely.
+	caps := provider.Capabilities()
+	var bridge *mcpBridge
+	mcpPort := 0
+	if caps.AskUserQuestionMCP || caps.PermissionPromptMCP {
+		b, err := newMCPBridge(id)
+		if err != nil {
+			return nil, err
+		}
+		bridge = b
+		mcpPort = b.port
+	}
 
 	m := &model{
 		id:                 id,
 		cwd:                cwd,
 		mcpBridge:          bridge,
-		mcpPort:            bridge.port,
+		mcpPort:            mcpPort,
+		provider:           provider,
 		mode:               modeInput,
 		input:              ta,
 		viewport:           vp,
@@ -88,9 +106,9 @@ func newTab(id int, cfg askConfig) (*model, error) {
 		renderer:           renderer,
 		width:              100,
 		height:             30,
-		claudeSlashCmds:    cfg.Claude.SlashCommands,
-		claudeModel:        cfg.Claude.Model,
-		claudeEffort:       cfg.Claude.Effort,
+		providerSlashCmds:  settings.SlashCommands,
+		providerModel:      settings.Model,
+		providerEffort:     settings.Effort,
 		ollamaHost:         cfg.Claude.Ollama.Host,
 		ollamaModel:        cfg.Claude.Ollama.Model,
 		themeName:          themeName,

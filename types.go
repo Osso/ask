@@ -1,7 +1,6 @@
 package main
 
 import (
-	"io"
 	"os/exec"
 	"sync"
 	"time"
@@ -13,26 +12,9 @@ import (
 	glamour "charm.land/glamour/v2"
 )
 
-type claudeResult struct {
-	Type      string `json:"type"`
-	Subtype   string `json:"subtype"`
-	IsError   bool   `json:"is_error"`
-	Result    string `json:"result"`
-	SessionID string `json:"session_id"`
-}
-
 type slashCmd struct {
 	name string
 	desc string
-}
-
-var builtinSlashCmds = []slashCmd{
-	{"/resume", "resume a previous Claude session"},
-	{"/new", "start a new Claude session"},
-	{"/clear", "start a new Claude session"},
-	{"/model", "select the Claude model"},
-	{"/effort", "select the Claude reasoning effort"},
-	{"/config", "configure ask"},
 }
 
 type sessionEntry struct {
@@ -52,35 +34,18 @@ const (
 	modeConfig
 )
 
-type claudeDoneMsg struct {
-	res  claudeResult
-	err  error
-	raw  string
-	proc *claudeProc
-}
-
 type streamStatusMsg struct {
 	status string
-	proc   *claudeProc
+	proc   *providerProc
 }
 
 type assistantTextMsg struct {
 	text string
-	proc *claudeProc
+	proc *providerProc
 }
 
 type turnCompleteMsg struct {
-	proc *claudeProc
-}
-
-type claudeExitedMsg struct {
-	err  error
-	proc *claudeProc
-}
-
-type claudeInitLoadedMsg struct {
-	slashCmds []claudeSlashEntry
-	err       error
+	proc *providerProc
 }
 
 type todoItem struct {
@@ -91,22 +56,17 @@ type todoItem struct {
 
 type todoUpdatedMsg struct {
 	todos []todoItem
-	proc  *claudeProc
-}
-
-type claudeCwdMsg struct {
-	cwd  string
-	proc *claudeProc
+	proc  *providerProc
 }
 
 type bgTaskStartedMsg struct {
 	taskID string
-	proc   *claudeProc
+	proc   *providerProc
 }
 
 type bgTaskEndedMsg struct {
 	taskID string
-	proc   *claudeProc
+	proc   *providerProc
 }
 
 type diffHunk struct {
@@ -120,18 +80,7 @@ type diffHunk struct {
 type toolDiffMsg struct {
 	filePath string
 	hunks    []diffHunk
-	proc     *claudeProc
-}
-
-type claudeSlashEntry struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-}
-
-type claudeProc struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stderr *stderrBuf
+	proc     *providerProc
 }
 
 type stderrBuf struct {
@@ -181,7 +130,6 @@ type historyLoadedMsg struct {
 	silent    bool
 }
 
-
 type frameCache struct {
 	vpFP   string
 	vpView string
@@ -198,6 +146,8 @@ type model struct {
 	id        int
 	cwd       string
 	mcpBridge *mcpBridge
+
+	provider Provider
 
 	input     textarea.Model
 	viewport  viewport.Model
@@ -221,7 +171,7 @@ type model struct {
 
 	status   string
 	streamCh chan tea.Msg
-	proc     *claudeProc
+	proc     *providerProc
 
 	pending     []pendingAttachment
 	nextImageID uint32
@@ -286,12 +236,12 @@ type model struct {
 
 	fc *frameCache
 
-	mcpPort         int
-	claudeModel     string
-	claudeEffort    string
-	ollamaHost      string
-	ollamaModel     string
-	claudeSlashCmds []claudeSlashEntry
+	mcpPort           int
+	providerModel     string
+	providerEffort    string
+	ollamaHost        string
+	ollamaModel       string
+	providerSlashCmds []providerSlashEntry
 
 	inputHistory []string
 	historyIdx   int

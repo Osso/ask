@@ -16,20 +16,255 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
+// claudeProvider implements the Provider interface for Anthropic's
+// claude CLI (stream-json mode). The struct is stateless — every
+// per-session piece of state lives on the providerProc handle.
+type claudeProvider struct{}
+
+func init() { registerProvider(claudeProvider{}) }
+
+func (claudeProvider) ID() string          { return "claude" }
+func (claudeProvider) DisplayName() string { return "Claude" }
+
+func (claudeProvider) Capabilities() ProviderCapabilities {
+	return ProviderCapabilities{
+		NativeWorktree:      true,
+		Resume:              true,
+		ModelPicker:         true,
+		EffortPicker:        true,
+		AskUserQuestionMCP:  true,
+		PermissionPromptMCP: true,
+	}
+}
+
+func (claudeProvider) ModelPicker() ProviderPicker {
+	return ProviderPicker{
+		Prompt:      "Select Claude model",
+		Options:     []string{"default", "haiku", "sonnet", "sonnet[1m]", "opus", "opus[1m]", ollamaModelOption},
+		AllowCustom: true,
+		SubConfig:   map[string]string{ollamaModelOption: "ollama"},
+	}
+}
+
+func (claudeProvider) EffortOptions() []string {
+	return []string{"default", "low", "medium", "high", "xhigh", "max"}
+}
+
+func (claudeProvider) BaseSlashCommands() []slashCmd {
+	return []slashCmd{
+		{"/resume", "resume a previous Claude session"},
+		{"/new", "start a new Claude session"},
+		{"/clear", "start a new Claude session"},
+		{"/model", "select the Claude model"},
+		{"/effort", "select the Claude reasoning effort"},
+	}
+}
+
+// askUserQuestionHookSettings redirects the built-in AskUserQuestion
+// tool to our MCP bridge via a PreToolUse hook. Claude's MCP tool calls
+// block on the user-question modal so the default timeout is too short.
 const askUserQuestionHookSettings = `{"hooks":{"PreToolUse":[{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"echo 'BLOCKED: the built-in AskUserQuestion tool is disabled here. Use the mcp__ask__ask_user_question MCP tool instead. It supports pick_one, pick_many, and pick_diagram question kinds and lets you bundle multiple questions in a single call; the user sees them as tabs and submits all answers together.' >&2; exit 2"}]}]}}`
 
-// MCP tool calls block on the user-question modal; default timeout is too short.
 const mcpTimeoutMillis = "86400000"
 
-func (m model) claudeEnv() []string {
+// claudeEnv returns the claude subprocess environment, routing Anthropic
+// traffic through a local ollama host when model == "ollama".
+func claudeEnv(args ProviderSessionArgs) []string {
 	env := append(os.Environ(), "MCP_TIMEOUT="+mcpTimeoutMillis)
-	if strings.EqualFold(m.claudeModel, "ollama") {
+	if strings.EqualFold(args.Model, "ollama") {
 		env = append(env,
-			"ANTHROPIC_BASE_URL="+ollamaBaseURL(m.ollamaHost),
+			"ANTHROPIC_BASE_URL="+ollamaBaseURL(args.OllamaHost),
 			"ANTHROPIC_AUTH_TOKEN=ollama",
 		)
 	}
 	return env
+}
+
+// claudeCLIArgs builds the argv for `claude -p`. Passing probe=true
+// omits --include-partial-messages and the permission-prompt tool so
+// the short-lived init probe doesn't trip permissions.
+func claudeCLIArgs(args ProviderSessionArgs, probe bool) []string {
+	out := []string{"-p",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--verbose",
+	}
+	if !probe {
+		out = append(out, "--include-partial-messages")
+	}
+	if args.SkipAllPermissions {
+		out = append(out, "--dangerously-skip-permissions")
+	}
+	if args.MCPPort > 0 {
+		out = append(out, "--mcp-config",
+			fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, args.MCPPort))
+		out = append(out, "--settings", askUserQuestionHookSettings)
+		if !probe {
+			out = append(out, "--permission-prompt-tool", "mcp__ask__approval_prompt")
+		}
+	}
+	switch {
+	case strings.EqualFold(args.Model, "ollama"):
+		if args.OllamaModel != "" {
+			out = append(out, "--model", args.OllamaModel)
+		}
+	case args.Model != "":
+		out = append(out, "--model", args.Model)
+	}
+	if args.Effort != "" {
+		out = append(out, "--effort", args.Effort)
+	}
+	if !probe {
+		if args.SessionID != "" {
+			out = append(out, "--resume", args.SessionID)
+		} else if args.Worktree && inGitCheckout() {
+			// claude refuses to start with --worktree outside a git checkout,
+			// so drop the flag silently in that case.
+			out = append(out, "--worktree")
+		}
+	}
+	return out
+}
+
+func (claudeProvider) StartSession(args ProviderSessionArgs) (*providerProc, chan tea.Msg, error) {
+	cliArgs := claudeCLIArgs(args, false)
+	cmd := exec.Command("claude", cliArgs...)
+	cmd.Env = claudeEnv(args)
+	// When resuming a worktree session, the jsonl lives under
+	// `~/.claude/projects/<main-encoded>--claude-worktrees-<name>/` — claude
+	// looks it up via its own cwd, so the subprocess has to run inside that
+	// worktree for `--resume` to find the file. For fresh sessions we honour
+	// args.Cwd, which the app sets either to the user's cwd or (for
+	// externally-managed worktrees, driven by providers with NativeWorktree
+	// false) to the ask-created worktree directory.
+	switch {
+	case args.SessionID != "" && args.ResumeCwd != "":
+		if err := ensureResumeWorktree(args.ResumeCwd); err != nil {
+			return nil, nil, err
+		}
+		cmd.Dir = args.ResumeCwd
+	case args.Cwd != "":
+		cmd.Dir = args.Cwd
+	}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	stderr := &stderrBuf{}
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+	ch := make(chan tea.Msg, 32)
+	proc := &providerProc{cmd: cmd, stdin: stdin, stderr: stderr}
+	go readClaudeStream(stdout, proc, ch)
+	return proc, ch, nil
+}
+
+func (claudeProvider) Send(p *providerProc, text string, attachments []pendingAttachment) error {
+	payload := map[string]any{
+		"type": "user",
+		"message": map[string]any{
+			"role":    "user",
+			"content": userContent(text, attachments),
+		},
+	}
+	b, _ := json.Marshal(payload)
+	_, err := p.stdin.Write(append(b, '\n'))
+	return err
+}
+
+func (claudeProvider) EnsureResumeCwd(resumeCwd string) error { return ensureResumeWorktree(resumeCwd) }
+
+func (claudeProvider) LoadSettings() ProviderSettings {
+	cfg, _ := loadConfig()
+	return ProviderSettings{
+		Model:         cfg.Claude.Model,
+		Effort:        cfg.Claude.Effort,
+		SlashCommands: cfg.Claude.SlashCommands,
+	}
+}
+
+func (claudeProvider) SaveSettings(s ProviderSettings) error {
+	cfg, _ := loadConfig()
+	cfg.Claude.Model = s.Model
+	cfg.Claude.Effort = s.Effort
+	cfg.Claude.SlashCommands = s.SlashCommands
+	return saveConfig(cfg)
+}
+
+func (claudeProvider) ListSessions(cwd string) ([]sessionEntry, error) {
+	return loadClaudeSessions(cwd)
+}
+
+func (claudeProvider) LoadHistory(sessionID string, opts HistoryOpts) ([]historyEntry, error) {
+	return loadClaudeHistory(sessionID, opts)
+}
+
+func (claudeProvider) ProbeInit(args ProviderSessionArgs) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+
+		cliArgs := claudeCLIArgs(args, true)
+		cmd := exec.CommandContext(ctx, "claude", cliArgs...)
+		cmd.Env = claudeEnv(args)
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			return providerInitLoadedMsg{err: err}
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return providerInitLoadedMsg{err: err}
+		}
+		cmd.Stderr = io.Discard
+		if err := cmd.Start(); err != nil {
+			return providerInitLoadedMsg{err: err}
+		}
+		killed := false
+		kill := func() {
+			if killed {
+				return
+			}
+			killed = true
+			_ = cmd.Process.Kill()
+		}
+		defer func() {
+			kill()
+			_ = stdin.Close()
+			_ = cmd.Wait()
+		}()
+
+		// init isn't emitted until at least one user message arrives on stdin;
+		// send a minimal ping and kill the process the moment init lands so the
+		// LLM dispatch never happens.
+		go func() {
+			_, _ = stdin.Write([]byte(`{"type":"user","message":{"role":"user","content":"."}}` + "\n"))
+		}()
+
+		sc := bufio.NewScanner(stdout)
+		sc.Buffer(make([]byte, 1<<20), 1<<22)
+		for sc.Scan() {
+			var ev struct {
+				Type          string   `json:"type"`
+				Subtype       string   `json:"subtype"`
+				SlashCommands []string `json:"slash_commands"`
+			}
+			if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
+				continue
+			}
+			if ev.Type == "system" && ev.Subtype == "init" {
+				kill()
+				debugLog("claude ProbeInit got %d slash commands", len(ev.SlashCommands))
+				return providerInitLoadedMsg{slashCmds: enrichSlashCommands(ev.SlashCommands)}
+			}
+		}
+		return providerInitLoadedMsg{err: fmt.Errorf("claude init event not seen")}
+	}
 }
 
 func userContent(line string, attachments []pendingAttachment) any {
@@ -68,176 +303,14 @@ func userBarText(line string, n int) string {
 	}
 }
 
-func (m model) sendToClaude(line string) (tea.Model, tea.Cmd) {
-	nAtt := len(m.pending)
-	debugLog("sendToClaude line=%q attachments=%d procNil=%v busy=%v sessionID=%q",
-		line, nAtt, m.proc == nil, m.busy, m.sessionID)
-	m.appendUser(userBarText(line, nAtt))
-	newProc := m.proc == nil
-	wasIdle := !m.busy
-	if err := m.ensureProc(); err != nil {
-		debugLog("ensureProc err: %v", err)
-		m.appendHistory(outputStyle.Render(errStyle.Render("could not start claude: " + err.Error())))
-		return m, nil
-	}
-	payload := map[string]any{
-		"type": "user",
-		"message": map[string]any{
-			"role":    "user",
-			"content": userContent(line, m.pending),
-		},
-	}
-	m.pending = nil
-	b, _ := json.Marshal(payload)
-	debugLog("sendToClaude writing payload bytes=%d newProc=%v wasIdle=%v", len(b), newProc, wasIdle)
-	if _, err := m.proc.stdin.Write(append(b, '\n')); err != nil {
-		debugLog("stdin write err: %v", err)
-		m.appendHistory(outputStyle.Render(errStyle.Render("write to claude failed: " + err.Error())))
-		m.killProc()
-		return m, nil
-	}
-	m.busy = true
-	m.status = "thinking…"
-	var cmds []tea.Cmd
-	if newProc {
-		cmds = append(cmds, nextStreamCmd(m.streamCh))
-	}
-	if wasIdle {
-		cmds = append(cmds, m.spinner.Tick)
-	}
-	if len(cmds) == 0 {
-		return m, nil
-	}
-	return m, tea.Batch(cmds...)
-}
-
-func (m *model) ensureProc() error {
-	if m.proc != nil {
-		return nil
-	}
-	args := []string{"-p",
-		"--input-format", "stream-json",
-		"--output-format", "stream-json",
-		"--verbose",
-		"--include-partial-messages",
-	}
-	if m.skipAllPermissions {
-		args = append(args, "--dangerously-skip-permissions")
-	}
-	if m.mcpPort > 0 {
-		args = append(args, "--mcp-config", fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, m.mcpPort))
-		args = append(args, "--settings", askUserQuestionHookSettings)
-		args = append(args, "--permission-prompt-tool", "mcp__ask__approval_prompt")
-	}
-	switch {
-	case strings.EqualFold(m.claudeModel, "ollama"):
-		if m.ollamaModel != "" {
-			args = append(args, "--model", m.ollamaModel)
-		}
-	case m.claudeModel != "":
-		args = append(args, "--model", m.claudeModel)
-	}
-	if m.claudeEffort != "" {
-		args = append(args, "--effort", m.claudeEffort)
-	}
-	if m.sessionID != "" {
-		args = append(args, "--resume", m.sessionID)
-	} else if m.worktree && inGitCheckout() {
-		// claude refuses to start with --worktree outside a git checkout,
-		// so drop the flag silently in that case.
-		args = append(args, "--worktree")
-	}
-	cmd := exec.Command("claude", args...)
-	cmd.Env = m.claudeEnv()
-	// When resuming a worktree session, the jsonl lives under
-	// `~/.claude/projects/<main-encoded>--claude-worktrees-<name>/` — claude
-	// looks it up via its own cwd, so the subprocess has to run inside that
-	// worktree for `--resume` to find the file.
-	if m.sessionID != "" && m.resumeCwd != "" {
-		if err := ensureResumeWorktree(m.resumeCwd); err != nil {
-			return err
-		}
-		cmd.Dir = m.resumeCwd
-	}
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	stderr := &stderrBuf{}
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	ch := make(chan tea.Msg, 32)
-	proc := &claudeProc{cmd: cmd, stdin: stdin, stderr: stderr}
-	m.proc = proc
-	m.streamCh = ch
-	go readClaudeStream(stdout, proc, ch)
-	return nil
-}
-
-func (m model) cancelTurn() model {
-	if !m.busy && m.proc == nil {
-		return m
-	}
-	m.flushTurnBuffer()
-	m.killProc()
-	m.appendHistory(outputStyle.Render(dimStyle.Render("✗ cancelled")))
-	return m
-}
-
-func (m *model) flushTurnBuffer() {
-	if len(m.turnBuffer) == 0 {
-		return
-	}
-	last := m.turnBuffer[len(m.turnBuffer)-1]
-	m.turnBuffer = nil
-	m.appendResponse(last)
-}
-
-func (m *model) killProc() {
-	if m.proc == nil {
-		return
-	}
-	_ = m.proc.stdin.Close()
-	_ = m.proc.cmd.Process.Kill()
-	m.proc = nil
-	m.streamCh = nil
-	m.busy = false
-	m.status = ""
-	m.todos = nil
-	m.bgTasks = nil
-}
-
-// drainPendingReplies unblocks any MCP tool call that was waiting on this
-// tab (ask/approval modal). Called when a tab is closed with a modal still
-// open so claude's request side doesn't hang on a dangling channel.
-func (m *model) drainPendingReplies() {
-	if m.askReply != nil {
-		select {
-		case m.askReply <- askReply{cancelled: true}:
-		default:
-		}
-		m.askReply = nil
-	}
-	if m.approvalReply != nil {
-		select {
-		case m.approvalReply <- approvalReply{allow: false}:
-		default:
-		}
-		m.approvalReply = nil
-	}
-}
-
-func readClaudeStream(stdout io.Reader, proc *claudeProc, ch chan tea.Msg) {
+// readClaudeStream translates claude's stream-json wire protocol into
+// the provider-neutral tea.Msg set. Each event emitted here carries the
+// proc pointer so the UI can drop messages from stale subprocesses.
+func readClaudeStream(stdout io.Reader, proc *providerProc, ch chan tea.Msg) {
 	defer close(ch)
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1<<20), 1<<22)
-	var pending claudeResult
+	var pending providerResult
 	for sc.Scan() {
 		var ev map[string]any
 		if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
@@ -249,7 +322,7 @@ func readClaudeStream(stdout io.Reader, proc *claudeProc, ch chan tea.Msg) {
 			switch subtype {
 			case "init":
 				if cwd, _ := ev["cwd"].(string); cwd != "" {
-					ch <- claudeCwdMsg{cwd: cwd, proc: proc}
+					ch <- providerCwdMsg{cwd: cwd, proc: proc}
 				}
 			case "task_started":
 				// task_type is optional on the wire and only populated for
@@ -295,7 +368,7 @@ func readClaudeStream(stdout io.Reader, proc *claudeProc, ch chan tea.Msg) {
 				ch <- turnCompleteMsg{proc: proc}
 			}
 		case "result":
-			pending = claudeResult{Type: "result"}
+			pending = providerResult{}
 			if r, _ := ev["result"].(string); r != "" {
 				pending.Result = r
 			}
@@ -303,12 +376,12 @@ func readClaudeStream(stdout io.Reader, proc *claudeProc, ch chan tea.Msg) {
 				pending.SessionID = id
 			}
 			pending.IsError, _ = ev["is_error"].(bool)
-			ch <- claudeDoneMsg{res: pending, proc: proc}
+			ch <- providerDoneMsg{res: pending, proc: proc}
 			ch <- turnCompleteMsg{proc: proc}
 		}
 	}
 	err := proc.cmd.Wait()
-	ch <- claudeExitedMsg{err: err, proc: proc}
+	ch <- providerExitedMsg{err: err, proc: proc}
 }
 
 func assistantTodos(ev map[string]any) ([]todoItem, bool) {
@@ -472,93 +545,6 @@ func formatToolStatus(name string, input map[string]any) string {
 		return "waiting for background task…"
 	}
 	return name
-}
-
-func (m model) probeClaudeInitCmd() tea.Cmd {
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-
-		args := []string{"-p",
-			"--input-format", "stream-json",
-			"--output-format", "stream-json",
-			"--verbose",
-		}
-		if m.skipAllPermissions {
-			args = append(args, "--dangerously-skip-permissions")
-		}
-		if m.mcpPort > 0 {
-			args = append(args,
-				"--mcp-config", fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, m.mcpPort),
-				"--settings", askUserQuestionHookSettings,
-			)
-		}
-		switch {
-		case strings.EqualFold(m.claudeModel, "ollama"):
-			if m.ollamaModel != "" {
-				args = append(args, "--model", m.ollamaModel)
-			}
-		case m.claudeModel != "":
-			args = append(args, "--model", m.claudeModel)
-		}
-		if m.claudeEffort != "" {
-			args = append(args, "--effort", m.claudeEffort)
-		}
-
-		cmd := exec.CommandContext(ctx, "claude", args...)
-		cmd.Env = m.claudeEnv()
-		stdin, err := cmd.StdinPipe()
-		if err != nil {
-			return claudeInitLoadedMsg{err: err}
-		}
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			return claudeInitLoadedMsg{err: err}
-		}
-		cmd.Stderr = io.Discard
-		if err := cmd.Start(); err != nil {
-			return claudeInitLoadedMsg{err: err}
-		}
-		killed := false
-		kill := func() {
-			if killed {
-				return
-			}
-			killed = true
-			_ = cmd.Process.Kill()
-		}
-		defer func() {
-			kill()
-			_ = stdin.Close()
-			_ = cmd.Wait()
-		}()
-
-		// init isn't emitted until at least one user message arrives on stdin;
-		// send a minimal ping and kill the process the moment init lands so the
-		// LLM dispatch never happens.
-		go func() {
-			_, _ = stdin.Write([]byte(`{"type":"user","message":{"role":"user","content":"."}}` + "\n"))
-		}()
-
-		sc := bufio.NewScanner(stdout)
-		sc.Buffer(make([]byte, 1<<20), 1<<22)
-		for sc.Scan() {
-			var ev struct {
-				Type          string   `json:"type"`
-				Subtype       string   `json:"subtype"`
-				SlashCommands []string `json:"slash_commands"`
-			}
-			if err := json.Unmarshal(sc.Bytes(), &ev); err != nil {
-				continue
-			}
-			if ev.Type == "system" && ev.Subtype == "init" {
-				kill()
-				debugLog("probeClaudeInit got %d slash commands", len(ev.SlashCommands))
-				return claudeInitLoadedMsg{slashCmds: enrichSlashCommands(ev.SlashCommands)}
-			}
-		}
-		return claudeInitLoadedMsg{err: fmt.Errorf("claude init event not seen")}
-	}
 }
 
 func nextStreamCmd(ch chan tea.Msg) tea.Cmd {

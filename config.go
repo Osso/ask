@@ -7,15 +7,18 @@ import (
 )
 
 type askConfig struct {
-	Claude claudeConfig `json:"claude"`
-	UI     uiConfig     `json:"ui,omitempty"`
+	// Provider is the agent CLI backend ID ("claude", "codex", …). Empty
+	// means "use the first registered provider" — currently Claude.
+	Provider string       `json:"provider,omitempty"`
+	Claude   claudeConfig `json:"claude"`
+	UI       uiConfig     `json:"ui,omitempty"`
 }
 
 type claudeConfig struct {
-	SlashCommands []claudeSlashEntry `json:"slashCommands,omitempty"`
-	Model         string             `json:"model,omitempty"`
-	Effort        string             `json:"effort,omitempty"`
-	Ollama        ollamaConfig       `json:"ollama,omitempty"`
+	SlashCommands []providerSlashEntry `json:"slashCommands,omitempty"`
+	Model         string               `json:"model,omitempty"`
+	Effort        string               `json:"effort,omitempty"`
+	Ollama        ollamaConfig         `json:"ollama,omitempty"`
 }
 
 type ollamaConfig struct {

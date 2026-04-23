@@ -12,8 +12,8 @@ import (
 )
 
 func (m model) Init() tea.Cmd {
-	debugLog("Init mcpPort=%d", m.mcpPort)
-	return tea.Batch(m.probeClaudeInitCmd(), cursor.Blink)
+	debugLog("Init provider=%s mcpPort=%d", m.provider.ID(), m.mcpPort)
+	return tea.Batch(m.provider.ProbeInit(m.sessionArgs()), cursor.Blink)
 }
 
 func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
@@ -77,7 +77,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		}
 		return m, nil
 
-	case claudeCwdMsg:
+	case providerCwdMsg:
 		if msg.proc != m.proc {
 			return m, nil
 		}
@@ -127,16 +127,16 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		}
 		return m, nil
 
-	case claudeInitLoadedMsg:
+	case providerInitLoadedMsg:
 		if msg.err != nil {
-			debugLog("claudeInitLoadedMsg err: %v", msg.err)
+			debugLog("providerInitLoadedMsg err: %v", msg.err)
 			return m, nil
 		}
-		debugLog("claudeInitLoadedMsg slashCmds=%d", len(msg.slashCmds))
-		m.claudeSlashCmds = msg.slashCmds
-		return m, persistSlashCmdsCmd(msg.slashCmds)
+		debugLog("providerInitLoadedMsg slashCmds=%d", len(msg.slashCmds))
+		m.providerSlashCmds = msg.slashCmds
+		return m, persistSlashCmdsCmd(m.provider, msg.slashCmds)
 
-	case claudeExitedMsg:
+	case providerExitedMsg:
 		if msg.proc != m.proc {
 			return m, nil
 		}
@@ -144,7 +144,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		if m.proc != nil && m.proc.stderr != nil {
 			stderrTail = strings.TrimSpace(m.proc.stderr.String())
 		}
-		debugLog("claudeExitedMsg err=%v stderrLen=%d", msg.err, len(stderrTail))
+		debugLog("providerExitedMsg err=%v stderrLen=%d", msg.err, len(stderrTail))
 		m.flushTurnBuffer()
 		m.busy = false
 		m.status = ""
@@ -158,7 +158,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			m = m.clearApproval()
 		}
 		if msg.err != nil || stderrTail != "" {
-			out := "claude exited"
+			out := m.provider.DisplayName() + " exited"
 			if msg.err != nil {
 				out += ": " + msg.err.Error()
 			}
@@ -169,11 +169,11 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		}
 		return m, nil
 
-	case claudeDoneMsg:
+	case providerDoneMsg:
 		if msg.proc != m.proc {
 			return m, nil
 		}
-		debugLog("claudeDoneMsg err=%v isError=%v resultLen=%d",
+		debugLog("providerDoneMsg err=%v isError=%v resultLen=%d",
 			msg.err, msg.res.IsError, len(msg.res.Result))
 		m.dismissCancelTurnConfirmIfIdle()
 		if msg.res.SessionID != "" {
@@ -591,7 +591,7 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(line, "/") {
 				return m.handleCommand(line)
 			}
-			return m.sendToClaude(val)
+			return m.sendToProvider(val)
 		}
 	}
 
@@ -858,7 +858,8 @@ func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.history = nil
 			m.appendHistory(outputStyle.Render(dimStyle.Render(
 				fmt.Sprintf("loading session %s…", short(entry.id)))))
-			return m, loadHistoryCmd(entry.id, m.renderDiffs, m.quietMode, false)
+			return m, loadHistoryCmd(m.provider, entry.id,
+				HistoryOpts{RenderDiffs: m.renderDiffs, QuietMode: m.quietMode}, false)
 		}
 	}
 	return m, nil
@@ -868,7 +869,7 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	cmd, _, _ := strings.Cut(line, " ")
 	switch cmd {
 	case "/resume":
-		return m, loadSessionsCmd()
+		return m, loadSessionsCmd(m.provider, m.cwd)
 	case "/new", "/clear":
 		m.killProc()
 		m.sessionID = ""
@@ -887,21 +888,21 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	bare := strings.TrimPrefix(cmd, "/")
-	for _, e := range m.claudeSlashCmds {
+	for _, e := range m.providerSlashCmds {
 		if e.Name == bare {
-			return m.sendToClaude(line)
+			return m.sendToProvider(line)
 		}
 	}
 	m.appendHistory(outputStyle.Render(errStyle.Render("unknown command: " + cmd)))
 	return m, nil
 }
 
-func persistSlashCmdsCmd(cmds []claudeSlashEntry) tea.Cmd {
+func persistSlashCmdsCmd(p Provider, cmds []providerSlashEntry) tea.Cmd {
 	return func() tea.Msg {
-		cfg, _ := loadConfig()
-		cfg.Claude.SlashCommands = cmds
-		if err := saveConfig(cfg); err != nil {
-			debugLog("saveConfig err: %v", err)
+		settings := p.LoadSettings()
+		settings.SlashCommands = cmds
+		if err := p.SaveSettings(settings); err != nil {
+			debugLog("SaveSettings err: %v", err)
 		}
 		return nil
 	}
@@ -966,15 +967,19 @@ func (m model) filterSlashCmds() []slashCmd {
 	if !strings.HasPrefix(val, "/") {
 		return nil
 	}
-	seen := make(map[string]bool, len(builtinSlashCmds))
+	builtins := append(m.provider.BaseSlashCommands(), appBuiltinSlashCmds...)
+	seen := make(map[string]bool, len(builtins))
 	var out []slashCmd
-	for _, c := range builtinSlashCmds {
+	for _, c := range builtins {
+		if seen[c.name] {
+			continue
+		}
 		seen[c.name] = true
 		if strings.HasPrefix(c.name, val) {
 			out = append(out, c)
 		}
 	}
-	for _, e := range m.claudeSlashCmds {
+	for _, e := range m.providerSlashCmds {
 		full := "/" + e.Name
 		if seen[full] {
 			continue
