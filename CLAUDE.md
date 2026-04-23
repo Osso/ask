@@ -29,6 +29,12 @@ and the documentation here:
 
 * https://code.claude.com/docs/en/agent-sdk/overview
 
+and when looking at the codex protocol, you must always run the following in a temp dir:
+
+* codex app-server generate-json-schema --out .
+
+to generate the app server protocol used communicate with codex; use this to understand how to work with codex
+
 ALL OF THE ABOVE IS NOT OPTIONAL. YOU MUST ALWAYS USE THE ABOVE REFERENCES.
 
 ## General info
