@@ -158,9 +158,10 @@ func newMCPBridge(tabID int) (*mcpBridge, error) {
 		Description: approvalToolDescription,
 		InputSchema: approvalInputSchema,
 	}, b.approvalTool)
+	// prevent DNS-rebinding via Host header bypass
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return b.server },
-		&mcp.StreamableHTTPOptions{DisableLocalhostProtection: true, Stateless: true},
+		&mcp.StreamableHTTPOptions{DisableLocalhostProtection: false, Stateless: true},
 	)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/hooks/subagent-start", b.handleHookSubagentStart)
