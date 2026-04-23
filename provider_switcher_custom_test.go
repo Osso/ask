@@ -6,9 +6,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// customSwitcherFixture puts the switcher cursor on the "Enter your
-// own" row for a provider that advertises AllowCustom, so tests start
-// exactly one Enter away from text-input mode.
+// customSwitcherFixture enters the shared model modal on the custom row
+// for a provider that advertises AllowCustom.
 func customSwitcherFixture(t *testing.T) model {
 	t.Helper()
 	isolateHome(t)
@@ -22,86 +21,82 @@ func customSwitcherFixture(t *testing.T) model {
 	withRegisteredProviders(t, p)
 	m := newTestModel(t, p)
 	m = m.openProviderSwitch()
-	// Descend to Level 1 (model list).
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	// Move cursor to the last row (the custom one).
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 	opts := switcherFetchModelOptions(m.providerSwitchProvIdx)
-	m.providerSwitchModelIdx = len(opts) - 1
+	m.askCursor = len(opts) - 1
+	m.askAnswers[0].picks = map[int]bool{m.askCursor: true}
 	return m
 }
 
-func TestSwitcherCustom_EnterActivatesTextInput(t *testing.T) {
-	m := customSwitcherFixture(t)
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	if !m.providerSwitchCustomActive {
-		t.Fatal("Enter on custom row must flip providerSwitchCustomActive")
+func TestSwitcherCustom_PreseedsSavedCustomModelInSharedAskModal(t *testing.T) {
+	isolateHome(t)
+	p := newFakeProvider()
+	p.id = "codex"
+	p.displayName = "Codex"
+	p.settings = ProviderSettings{Model: "custom-model-id"}
+	p.modelPicker = ProviderPicker{
+		Options:     []string{"default", "gpt-5"},
+		AllowCustom: true,
 	}
-	// Preload: when the provider has a saved model, the text field
-	// seeds with it so the user can edit rather than retype.
-	if m.providerSwitchCustomText != providerRegistry[m.providerSwitchProvIdx].LoadSettings().Model {
-		t.Errorf("text should seed from saved model, got %q", m.providerSwitchCustomText)
+	withRegisteredProviders(t, p)
+	m := newTestModel(t, p)
+	m = m.openProviderSwitch()
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
+
+	if m.mode != modeAskQuestion {
+		t.Fatalf("mode=%v want modeAskQuestion", m.mode)
+	}
+	if m.askCursor != len(m.askQuestions[0].options)-1 {
+		t.Fatalf("cursor=%d want custom row", m.askCursor)
+	}
+	if m.askAnswers[0].custom != "custom-model-id" {
+		t.Errorf("custom text=%q want custom-model-id", m.askAnswers[0].custom)
 	}
 }
 
-func TestSwitcherCustom_TypingAccumulatesText(t *testing.T) {
+func TestSwitcherCustom_TypingUsesSharedAskField(t *testing.T) {
 	m := customSwitcherFixture(t)
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	// Clear the seeded text so the test controls the accumulator.
-	m.providerSwitchCustomText = ""
+	m.askAnswers[0].custom = ""
 
 	for _, r := range "gpt-5" {
-		mi, _ := m.updateProviderSwitch(tea.KeyPressMsg{Text: string(r)})
-		m = mi.(model)
+		m = stepKey(t, m, tea.KeyPressMsg{Text: string(r)})
 	}
-	if m.providerSwitchCustomText != "gpt-5" {
-		t.Errorf("typed text=%q want 'gpt-5'", m.providerSwitchCustomText)
-	}
-}
-
-func TestSwitcherCustom_BackspaceRemovesOne(t *testing.T) {
-	m := customSwitcherFixture(t)
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	m.providerSwitchCustomText = "abc"
-
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyBackspace))
-	m = mi.(model)
-	if m.providerSwitchCustomText != "ab" {
-		t.Errorf("backspace text=%q want ab", m.providerSwitchCustomText)
+	if m.askAnswers[0].custom != "gpt-5" {
+		t.Errorf("typed text=%q want gpt-5", m.askAnswers[0].custom)
 	}
 }
 
-func TestSwitcherCustom_EscPopsBackPreservingText(t *testing.T) {
+func TestSwitcherCustom_BackspaceUsesSharedAskField(t *testing.T) {
 	m := customSwitcherFixture(t)
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	m.providerSwitchCustomText = "partial"
+	m.askAnswers[0].custom = "abc"
 
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEsc))
-	m = mi.(model)
-	if m.providerSwitchCustomActive {
-		t.Error("Esc should deactivate text-input")
+	m = stepKey(t, m, pressSpecial(tea.KeyBackspace))
+	if m.askAnswers[0].custom != "ab" {
+		t.Errorf("backspace text=%q want ab", m.askAnswers[0].custom)
 	}
-	// Still in modeProviderSwitch so user can re-enter and continue.
+}
+
+func TestSwitcherCustom_EscReturnsToProviderList(t *testing.T) {
+	m := customSwitcherFixture(t)
+	m.askAnswers[0].custom = "partial"
+
+	m = stepKey(t, m, pressSpecial(tea.KeyEsc))
 	if m.mode != modeProviderSwitch {
 		t.Errorf("mode=%v want modeProviderSwitch", m.mode)
 	}
-	if m.providerSwitchCustomText != "partial" {
-		t.Errorf("Esc must preserve typed text, got %q", m.providerSwitchCustomText)
+	if m.providerSwitchLevel != 0 {
+		t.Errorf("level=%d want 0", m.providerSwitchLevel)
+	}
+	if len(m.askQuestions) != 0 || len(m.askAnswers) != 0 {
+		t.Errorf("ask modal state should clear on Esc; questions=%d answers=%d", len(m.askQuestions), len(m.askAnswers))
 	}
 }
 
 func TestSwitcherCustom_EnterAppliesTypedModel(t *testing.T) {
 	m := customSwitcherFixture(t)
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	m.providerSwitchCustomText = "custom-model-id"
+	m.askAnswers[0].custom = "custom-model-id"
 
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 	if m.providerModel != "custom-model-id" {
 		t.Errorf("providerModel=%q want custom-model-id", m.providerModel)
 	}
@@ -111,20 +106,15 @@ func TestSwitcherCustom_EnterAppliesTypedModel(t *testing.T) {
 }
 
 func TestSwitcherCustom_EmptySubmitIsNoop(t *testing.T) {
-	// A blank Enter press mustn't accidentally clear the model —
-	// that's what picking "default" from the list does explicitly.
 	m := customSwitcherFixture(t)
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	m.providerSwitchCustomText = ""
+	m.askAnswers[0].custom = ""
 	preModel := m.providerModel
 
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 	if m.providerModel != preModel {
 		t.Errorf("empty submit should not change model; pre=%q post=%q", preModel, m.providerModel)
 	}
-	if m.mode != modeProviderSwitch {
-		t.Errorf("empty submit should not close the switcher")
+	if m.mode != modeAskQuestion {
+		t.Errorf("empty submit should keep the shared ask modal open; mode=%v", m.mode)
 	}
 }

@@ -15,7 +15,7 @@ const ollamaModelOption = "ollama (configure...)"
 const ollamaBoxWidth = 58
 
 func (m model) cursorOnOllamaConfig() bool {
-	if m.askMode != askForModel || m.isOnConfirmTab() {
+	if !m.isModelPickerMode() || m.isOnConfirmTab() {
 		return false
 	}
 	q := m.askQuestions[m.askTab]
@@ -105,7 +105,7 @@ func (m model) saveOllamaConfig() (tea.Model, tea.Cmd) {
 	m.ollamaHost = host
 	m.ollamaModel = modelName
 	m = m.clearAskOllamaConfig()
-	if m.askMode == askForModel && len(m.askQuestions) > 0 && len(m.askAnswers) > 0 {
+	if m.isModelPickerMode() && len(m.askQuestions) > 0 && len(m.askAnswers) > 0 {
 		for i, opt := range m.askQuestions[0].options {
 			if opt == ollamaModelOption {
 				m.askAnswers[0].picks = map[int]bool{i: true}
@@ -115,7 +115,7 @@ func (m model) saveOllamaConfig() (tea.Model, tea.Cmd) {
 		}
 	}
 	m = m.advanceAskTab()
-	if m.askMode == askForModel && m.isOnConfirmTab() {
+	if m.isModelPickerMode() && m.isOnConfirmTab() {
 		return m.submitAsk()
 	}
 	return m, nil

@@ -273,26 +273,14 @@ type model struct {
 	configProviderCursor       int
 	configProviderBackup       string
 
-	// Ctrl+B multi-layer switcher state. Level 0 picks provider; Level 1
-	// picks a model from that provider's picker; Enter at Level 1
-	// applies both to the current tab and saves cfg.Provider as the new
-	// default. Esc at Level 1 pops to Level 0; Esc at Level 0 cancels.
-	// When the cursor lands on the trailing "Enter your own" row and
-	// the user hits Enter, providerSwitchCustomActive flips true and
-	// providerSwitchCustomText starts collecting keystrokes. Enter
-	// then applies the typed value; Esc pops back to the list without
-	// losing what was typed so far.
-	providerSwitchLevel        int
-	providerSwitchProvIdx      int
-	providerSwitchModelIdx     int
-	providerSwitchCustomActive bool
-	providerSwitchCustomText   string
-	// providerSwitchModelOpts is the snapshot of the target
-	// provider's model picker options captured at Level-0 → Level-1
-	// descent. Caching here keeps the switcher's view renderer off
-	// ModelPicker() (which for codex costs a forked app-server RPC)
-	// on every keystroke.
-	providerSwitchModelOpts []string
+	// Ctrl+B starts at the provider list (Level 0). Picking a provider
+	// with model options advances to Level 1, which reuses the shared
+	// ask/model modal rather than a separate switcher-specific editor.
+	// Esc from that modal pops back to the provider list; applying a
+	// choice switches the current tab and saves cfg.Provider for new
+	// tabs.
+	providerSwitchLevel   int
+	providerSwitchProvIdx int
 
 	themeName string
 
@@ -332,6 +320,7 @@ type askMode int
 const (
 	askForMCP askMode = iota
 	askForModel
+	askForProviderSwitchModel
 	askForEffort
 )
 

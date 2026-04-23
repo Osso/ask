@@ -36,7 +36,6 @@ const (
 	askEditNote
 )
 
-
 const askBoxWidth = 100
 
 func (m model) startAsk(qs []question) model {
@@ -69,15 +68,50 @@ func (m model) clearAsk() model {
 	return m
 }
 
-func (m model) startModelPicker() model {
-	picker := m.provider.ModelPicker()
+func modelPickerOptions(picker ProviderPicker) []string {
 	options := append([]string{}, picker.Options...)
 	if picker.AllowCustom {
-		options = append(options, "Enter your own")
+		options = append(options, switcherCustomRowLabel)
 	}
+	return options
+}
+
+func seedModelPickerSelection(selectedModel string, options []string) (int, string) {
+	if len(options) == 0 {
+		return 0, ""
+	}
+	switch {
+	case strings.EqualFold(selectedModel, "ollama"):
+		for i, opt := range options {
+			if opt == ollamaModelOption {
+				return i, ""
+			}
+		}
+	case selectedModel != "":
+		for i, opt := range options {
+			if strings.EqualFold(opt, switcherCustomRowLabel) || opt == ollamaModelOption {
+				continue
+			}
+			if strings.EqualFold(opt, selectedModel) {
+				return i, ""
+			}
+		}
+		if strings.EqualFold(options[len(options)-1], switcherCustomRowLabel) {
+			return len(options) - 1, selectedModel
+		}
+	}
+	return 0, ""
+}
+
+func (m model) isModelPickerMode() bool {
+	return m.askMode == askForModel || m.askMode == askForProviderSwitchModel
+}
+
+func (m model) startModelPickerWith(prov Provider, picker ProviderPicker, selectedModel string, mode askMode) model {
+	options := modelPickerOptions(picker)
 	prompt := picker.Prompt
 	if prompt == "" {
-		prompt = "Select " + m.provider.DisplayName() + " model"
+		prompt = "Select " + prov.DisplayName() + " model"
 	}
 	m = m.startAsk([]question{{
 		kind:     qPickOne,
@@ -85,39 +119,21 @@ func (m model) startModelPicker() model {
 		options:  options,
 		diagrams: make([]string, len(options)),
 	}})
-	m.askMode = askForModel
-
-	selected := 0
-	switch {
-	case strings.EqualFold(m.providerModel, "ollama"):
-		for i, opt := range options {
-			if opt == ollamaModelOption {
-				selected = i
-				break
-			}
-		}
-	case m.providerModel != "":
-		selected = len(options) - 1
-		for i, opt := range options {
-			if strings.EqualFold(opt, "Enter your own") || opt == ollamaModelOption {
-				continue
-			}
-			if strings.EqualFold(opt, m.providerModel) {
-				selected = i
-				break
-			}
-		}
-		if selected == len(options)-1 {
-			m.askAnswers[0].custom = m.providerModel
-		}
+	m.askMode = mode
+	selected, custom := seedModelPickerSelection(selectedModel, options)
+	if custom != "" {
+		m.askAnswers[0].custom = custom
 	}
 	m.askAnswers[0].picks[selected] = true
 	m.askCursor = selected
 	return m
 }
 
-func (m model) applyModelPick() (model, tea.Cmd) {
-	var picked string
+func (m model) startModelPicker() model {
+	return m.startModelPickerWith(m.provider, m.provider.ModelPicker(), m.providerModel, askForModel)
+}
+
+func (m model) pickedModelFromAsk() string {
 	if len(m.askQuestions) > 0 && len(m.askAnswers) > 0 {
 		q := m.askQuestions[0]
 		ans := m.askAnswers[0]
@@ -127,18 +143,22 @@ func (m model) applyModelPick() (model, tea.Cmd) {
 			}
 			switch {
 			case q.options[idx] == ollamaModelOption:
-				picked = "ollama"
-			case strings.EqualFold(q.options[idx], "Enter your own"):
-				picked = strings.TrimSpace(ans.custom)
+				return "ollama"
+			case strings.EqualFold(q.options[idx], switcherCustomRowLabel):
+				return strings.TrimSpace(ans.custom)
 			default:
-				picked = q.options[idx]
+				if strings.EqualFold(q.options[idx], "default") {
+					return ""
+				}
+				return q.options[idx]
 			}
-			break
 		}
 	}
-	if strings.EqualFold(picked, "default") {
-		picked = ""
-	}
+	return ""
+}
+
+func (m model) applyModelPick() (model, tea.Cmd) {
+	picked := m.pickedModelFromAsk()
 	m = m.clearAsk()
 	if picked == m.providerModel {
 		return m, nil
@@ -162,6 +182,13 @@ func (m model) applyModelPick() (model, tea.Cmd) {
 	}
 	m.appendHistory(outputStyle.Render(promptStyle.Render(msg)))
 	return m, nil
+}
+
+func (m model) applyProviderSwitchModelPick() (model, tea.Cmd) {
+	picked := m.pickedModelFromAsk()
+	m = m.clearAsk()
+	mi, cmd := m.applyProviderSwitch(picked)
+	return mi.(model), cmd
 }
 
 func (m model) startEffortPicker() model {
@@ -229,7 +256,7 @@ func (m model) isCustomOption(tab int) bool {
 	if len(q.options) == 0 {
 		return false
 	}
-	return strings.EqualFold(q.options[len(q.options)-1], "Enter your own")
+	return strings.EqualFold(q.options[len(q.options)-1], switcherCustomRowLabel)
 }
 
 func (m model) isOnConfirmTab() bool {
@@ -237,7 +264,7 @@ func (m model) isOnConfirmTab() bool {
 }
 
 func (m model) isSinglePicker() bool {
-	return m.askMode == askForModel || m.askMode == askForEffort
+	return m.isModelPickerMode() || m.askMode == askForEffort
 }
 
 func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -253,6 +280,9 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.Mod == tea.ModCtrl && msg.Code == 'c' {
 		if m.askReply != nil {
 			m.askReply <- askReply{cancelled: true}
+		}
+		if m.askMode == askForProviderSwitchModel {
+			return m.clearAsk().closeProviderSwitch(), nil
 		}
 		return m.clearAsk(), nil
 	}
@@ -299,6 +329,9 @@ func (m model) updateAsk(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.askConfirmingCancel = true
 			m.askCancelChoice = 0
 			return m, nil
+		}
+		if m.askMode == askForProviderSwitchModel {
+			return m.cancelProviderSwitchModelPicker(), nil
 		}
 		return m.clearAsk(), nil
 
@@ -508,6 +541,9 @@ func (m model) submitAsk() (model, tea.Cmd) {
 	if m.askMode == askForModel {
 		return m.applyModelPick()
 	}
+	if m.askMode == askForProviderSwitchModel {
+		return m.applyProviderSwitchModelPick()
+	}
 	if m.askMode == askForEffort {
 		return m.applyEffortPick()
 	}
@@ -550,7 +586,7 @@ func renderAnswerSummary(q question, ans qAnswer) string {
 	}
 	picked := make([]string, 0, len(ans.picks))
 	customIdx := len(q.options) - 1
-	isCustom := strings.EqualFold(q.options[customIdx], "Enter your own")
+	isCustom := strings.EqualFold(q.options[customIdx], switcherCustomRowLabel)
 	for i, opt := range q.options {
 		if !ans.picks[i] {
 			continue
@@ -835,7 +871,7 @@ func askOptionLabelLines(opt string, isCustomOpt bool, custom string, cursor boo
 		if cursor {
 			return []string{askPlaceholder.Render("start typing…") + askCaretStyle.Render("▏")}
 		}
-		return []string{askPlaceholder.Render("Enter your own")}
+		return []string{askPlaceholder.Render(switcherCustomRowLabel)}
 	}
 	lines := strings.Split(custom, "\n")
 	if cursor {

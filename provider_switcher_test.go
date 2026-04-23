@@ -15,9 +15,20 @@ func pressKey(code rune, mods tea.KeyMod) tea.KeyPressMsg {
 
 func pressSpecial(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
 
+func stepKey(t *testing.T, m model, msg tea.KeyPressMsg) model {
+	t.Helper()
+	mi, _ := m.Update(msg)
+	mm, ok := mi.(model)
+	if !ok {
+		t.Fatalf("Update returned %T, want model", mi)
+	}
+	return mm
+}
+
 // providerSwitcherFixture stands up a registry with two fake providers
 // and seeds a test model pointed at the first one. The second provider
-// has a non-trivial ModelPicker so Level 1 tests have rows to navigate.
+// has a non-trivial ModelPicker so the shared ask modal has rows to
+// navigate.
 func providerSwitcherFixture(t *testing.T) (model, *fakeProvider, *fakeProvider) {
 	t.Helper()
 	isolateHome(t)
@@ -55,21 +66,31 @@ func TestOpenProviderSwitch_StartsAtLevel0OnCurrentProvider(t *testing.T) {
 	}
 }
 
-func TestSwitcher_Level0NavigatesAndDescends(t *testing.T) {
+func TestSwitcher_Level0NavigatesAndDescendsIntoSharedModelModal(t *testing.T) {
 	m, _, _ := providerSwitcherFixture(t)
 	m = m.openProviderSwitch()
 
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyDown))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyDown))
 	if m.providerSwitchProvIdx != 1 {
 		t.Errorf("after Down, prov cursor=%d want 1", m.providerSwitchProvIdx)
 	}
 
-	// Enter on a provider with model options descends to Level 1.
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
+	if m.mode != modeAskQuestion {
+		t.Fatalf("mode after Enter=%v want modeAskQuestion", m.mode)
+	}
+	if m.askMode != askForProviderSwitchModel {
+		t.Fatalf("askMode=%v want askForProviderSwitchModel", m.askMode)
+	}
 	if m.providerSwitchLevel != 1 {
 		t.Errorf("level after Enter=%d want 1", m.providerSwitchLevel)
+	}
+	if got := m.askQuestions[0].prompt; got != "Select Codex model" {
+		t.Errorf("prompt=%q want Select Codex model", got)
+	}
+	opts := m.askQuestions[0].options
+	if len(opts) != 2 || opts[len(opts)-1] != switcherCustomRowLabel {
+		t.Errorf("model modal options=%v want [default %q]", opts, switcherCustomRowLabel)
 	}
 }
 
@@ -77,8 +98,7 @@ func TestSwitcher_Level0DownStopsAtLast(t *testing.T) {
 	m, _, _ := providerSwitcherFixture(t)
 	m = m.openProviderSwitch()
 	for i := 0; i < 5; i++ {
-		mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyDown))
-		m = mi.(model)
+		m = stepKey(t, m, pressSpecial(tea.KeyDown))
 	}
 	if m.providerSwitchProvIdx != 1 {
 		t.Errorf("Down should clamp at last index; got %d (len=%d)", m.providerSwitchProvIdx, len(providerRegistry))
@@ -90,8 +110,7 @@ func TestSwitcher_Level0UpStopsAtZero(t *testing.T) {
 	m = m.openProviderSwitch()
 	m.providerSwitchProvIdx = 1
 	for i := 0; i < 3; i++ {
-		mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyUp))
-		m = mi.(model)
+		m = stepKey(t, m, pressSpecial(tea.KeyUp))
 	}
 	if m.providerSwitchProvIdx != 0 {
 		t.Errorf("Up should clamp at 0, got %d", m.providerSwitchProvIdx)
@@ -103,8 +122,7 @@ func TestSwitcher_Level0EscCancelsWithoutChange(t *testing.T) {
 	m.provider = p1
 	m = m.openProviderSwitch()
 
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEsc))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyEsc))
 	if m.mode != modeInput {
 		t.Errorf("mode after Esc=%v want modeInput", m.mode)
 	}
@@ -113,19 +131,21 @@ func TestSwitcher_Level0EscCancelsWithoutChange(t *testing.T) {
 	}
 }
 
-func TestSwitcher_Level1EscPopsToLevel0(t *testing.T) {
+func TestSwitcher_ModelModalEscReturnsToProviderList(t *testing.T) {
 	m, _, _ := providerSwitcherFixture(t)
 	m = m.openProviderSwitch()
-	m.providerSwitchLevel = 1
-	m.providerSwitchProvIdx = 1
+	m = stepKey(t, m, pressSpecial(tea.KeyDown))
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEsc))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyEsc))
 	if m.providerSwitchLevel != 0 {
-		t.Errorf("Esc at Level 1 should pop to Level 0, got %d", m.providerSwitchLevel)
+		t.Errorf("Esc from model modal should pop to Level 0, got %d", m.providerSwitchLevel)
 	}
 	if m.mode != modeProviderSwitch {
-		t.Errorf("mode should stay modeProviderSwitch on pop, got %v", m.mode)
+		t.Errorf("mode should return to modeProviderSwitch, got %v", m.mode)
+	}
+	if m.providerSwitchProvIdx != 1 {
+		t.Errorf("provider cursor should stay on the previously selected provider, got %d", m.providerSwitchProvIdx)
 	}
 }
 
@@ -136,14 +156,9 @@ func TestSwitcher_ApplySwapsProviderAndSavesDefault(t *testing.T) {
 	m.worktreeName = "ask-claude-abc123def456"
 
 	m = m.openProviderSwitch()
-	// Move cursor to p2 (codex), Enter, Enter (picks "default" model).
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyDown))
-	m = mi.(model)
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	// Now at Level 1; Enter picks the first option ("default").
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyDown))
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 
 	if m.provider == nil || m.provider.ID() != p2.ID() {
 		got := "<nil>"
@@ -153,16 +168,12 @@ func TestSwitcher_ApplySwapsProviderAndSavesDefault(t *testing.T) {
 		t.Fatalf("provider after apply=%q want codex", got)
 	}
 	if m.providerModel != "" {
-		// "default" label → empty string in our decoder
 		t.Errorf("providerModel=%q want empty after picking default", m.providerModel)
 	}
-	// session-scoped state belongs to claude; cross-provider swap clears it.
 	if m.sessionID != "" || m.resumeCwd != "" {
 		t.Errorf("session/resume state should clear on cross-provider swap, got s=%q r=%q",
 			m.sessionID, m.resumeCwd)
 	}
-	// Worktree is shared across providers — the directory on disk is
-	// the same branch, so codex runs inside the claude-tagged dir.
 	if m.worktreeName != "ask-claude-abc123def456" {
 		t.Errorf("worktreeName should survive cross-provider swap (shared dir), got %q", m.worktreeName)
 	}
@@ -170,7 +181,6 @@ func TestSwitcher_ApplySwapsProviderAndSavesDefault(t *testing.T) {
 		t.Errorf("mode after apply=%v want modeInput", m.mode)
 	}
 
-	// cfg.Provider must be persisted as the new default.
 	cfg, _ := loadConfig()
 	if cfg.Provider != "codex" {
 		t.Errorf("cfg.Provider=%q want codex", cfg.Provider)
@@ -180,29 +190,19 @@ func TestSwitcher_ApplySwapsProviderAndSavesDefault(t *testing.T) {
 func TestSwitcher_ApplyPersistsModelInProviderSettings(t *testing.T) {
 	m, _, p2 := providerSwitcherFixture(t)
 	m = m.openProviderSwitch()
-	m.providerSwitchProvIdx = 1 // codex
-	// Simulate the Level 0 → Level 1 descent so the cached options
-	// are populated from the target provider's (fake) picker instead
-	// of reaching for a live RPC.
-	m.providerSwitchModelOpts = switcherFetchModelOptions(1)
-	m.providerSwitchLevel = 1
-	m.providerSwitchModelIdx = 0 // "default"
-
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
+	m.providerSwitchProvIdx = 1
+	m = m.startProviderSwitchModelPicker(p2.ModelPicker())
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 
 	if len(p2.savedState) == 0 {
 		t.Fatal("SaveSettings was never called on the target provider")
 	}
-	// "default" → empty Model
 	if last := p2.savedState[len(p2.savedState)-1]; last.Model != "" {
 		t.Errorf("saved Model=%q want empty (default)", last.Model)
 	}
 }
 
 func TestSwitcher_Level0EnterAppliesImmediatelyWhenNoModels(t *testing.T) {
-	// A provider that returns an empty ModelPicker should skip Level 1
-	// entirely — Enter on it applies the provider switch directly.
 	isolateHome(t)
 	p1 := newFakeProvider()
 	p1.id = "claude"
@@ -210,20 +210,18 @@ func TestSwitcher_Level0EnterAppliesImmediatelyWhenNoModels(t *testing.T) {
 	p2 := newFakeProvider()
 	p2.id = "bare"
 	p2.displayName = "Bare"
-	p2.modelPicker = ProviderPicker{} // no options, no custom
+	p2.modelPicker = ProviderPicker{}
 	withRegisteredProviders(t, p1, p2)
 	m := newTestModel(t, p1)
 
 	m = m.openProviderSwitch()
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyDown))
-	m = mi.(model)
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyDown))
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 	if m.provider.ID() != "bare" {
 		t.Errorf("provider=%q want bare", m.provider.ID())
 	}
 	if m.mode != modeInput {
-		t.Errorf("mode=%v want modeInput (Level 1 should be skipped)", m.mode)
+		t.Errorf("mode=%v want modeInput (model modal should be skipped)", m.mode)
 	}
 }
 
@@ -245,32 +243,33 @@ func TestSwitcher_IndexOfProviderFindsMatch(t *testing.T) {
 	}
 }
 
-func TestSwitcher_SeedModelCursorMatchesSavedModel(t *testing.T) {
-	p1 := newFakeProvider()
-	p1.id = "claude"
-	p1.settings = ProviderSettings{Model: "opus"}
-	withRegisteredProviders(t, p1)
+func TestSeedModelPickerSelectionMatchesSavedModel(t *testing.T) {
 	opts := []string{"default", "sonnet", "opus"}
-	if got := seedModelCursor(0, opts); got != 2 {
-		t.Errorf("seedModelCursor(opus)=%d want 2", got)
+	got, custom := seedModelPickerSelection("opus", opts)
+	if got != 2 || custom != "" {
+		t.Errorf("seedModelPickerSelection(opus)=(%d,%q) want (2,\"\")", got, custom)
 	}
 }
 
-func TestSwitcher_SeedModelCursorFallsBackToCustomRow(t *testing.T) {
-	p1 := newFakeProvider()
-	p1.id = "claude"
-	p1.settings = ProviderSettings{Model: "gpt-5"}
-	withRegisteredProviders(t, p1)
-	opts := []string{"default", "Enter your own"}
-	if got := seedModelCursor(0, opts); got != 1 {
-		t.Errorf("seedModelCursor custom fallback=%d want 1 (last row)", got)
+func TestSeedModelPickerSelectionFallsBackToCustomRow(t *testing.T) {
+	opts := []string{"default", switcherCustomRowLabel}
+	got, custom := seedModelPickerSelection("gpt-5", opts)
+	if got != 1 || custom != "gpt-5" {
+		t.Errorf("seedModelPickerSelection(custom)=(%d,%q) want (1,\"gpt-5\")", got, custom)
+	}
+}
+
+func TestSeedModelPickerSelectionMatchesOllama(t *testing.T) {
+	opts := []string{"default", ollamaModelOption, switcherCustomRowLabel}
+	got, custom := seedModelPickerSelection("ollama", opts)
+	if got != 1 || custom != "" {
+		t.Errorf("seedModelPickerSelection(ollama)=(%d,%q) want (1,\"\")", got, custom)
 	}
 }
 
 func TestSwitcher_CtrlBOpensFromInputMode(t *testing.T) {
 	m, _, _ := providerSwitcherFixture(t)
-	mi, _ := m.Update(pressKey('b', tea.ModCtrl))
-	m = mi.(model)
+	m = stepKey(t, m, pressKey('b', tea.ModCtrl))
 	if m.mode != modeProviderSwitch {
 		t.Errorf("Ctrl+B should switch to modeProviderSwitch, got %v", m.mode)
 	}
@@ -279,26 +278,9 @@ func TestSwitcher_CtrlBOpensFromInputMode(t *testing.T) {
 func TestSwitcher_CtrlBIgnoredWhileBusy(t *testing.T) {
 	m, _, _ := providerSwitcherFixture(t)
 	m.busy = true
-	mi, _ := m.Update(pressKey('b', tea.ModCtrl))
-	m = mi.(model)
+	m = stepKey(t, m, pressKey('b', tea.ModCtrl))
 	if m.mode == modeProviderSwitch {
 		t.Errorf("Ctrl+B should be a no-op while busy; mode flipped to modeProviderSwitch")
-	}
-}
-
-func TestSwitcherModelFromLabel(t *testing.T) {
-	cases := []struct {
-		label, want string
-	}{
-		{"sonnet", "sonnet"},
-		{"default", ""},
-		{"Default", ""},
-		{ollamaModelOption, "ollama"},
-	}
-	for _, c := range cases {
-		if got := switcherModelFromLabel(c.label); got != c.want {
-			t.Errorf("switcherModelFromLabel(%q)=%q want %q", c.label, got, c.want)
-		}
 	}
 }
 
@@ -348,9 +330,6 @@ func TestSwitcherModelOptions_OmitsEnterYourOwnWhenNotAllowed(t *testing.T) {
 }
 
 func TestSwitcher_SameProviderDifferentModelKeepsSession(t *testing.T) {
-	// Swapping models within the same provider (Claude sonnet →
-	// Claude opus) should preserve the resume chain so the next turn
-	// lands in the same conversation.
 	isolateHome(t)
 	p1 := newFakeProvider()
 	p1.id = "claude"
@@ -363,16 +342,10 @@ func TestSwitcher_SameProviderDifferentModelKeepsSession(t *testing.T) {
 	m.worktreeName = "feat-x"
 
 	m = m.openProviderSwitch()
-	// Enter on the current provider to reach Level 1.
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	// Pick "opus" (idx 2).
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyDown))
-	m = mi.(model)
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyDown))
-	m = mi.(model)
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
+	m = stepKey(t, m, pressSpecial(tea.KeyDown))
+	m = stepKey(t, m, pressSpecial(tea.KeyDown))
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 
 	if m.sessionID != "keep-this-id" {
 		t.Errorf("same-provider swap wiped sessionID: %q", m.sessionID)
@@ -389,22 +362,15 @@ func TestSwitcher_SameProviderDifferentModelKeepsSession(t *testing.T) {
 }
 
 func TestSwitcher_CrossProviderStillClearsSession(t *testing.T) {
-	// The cross-provider path should wipe session state (resume ids
-	// are provider-specific) but preserve the worktree directory —
-	// every provider in the tab shares the same branch.
 	m, _, _ := providerSwitcherFixture(t)
 	m.sessionID = "claude-session"
 	m.resumeCwd = "/work/here"
 	m.worktreeName = "ask-claude-shared"
 
 	m = m.openProviderSwitch()
-	// Navigate to codex (idx 1), descend to Level 1, pick default.
-	mi, _ := m.updateProviderSwitch(pressSpecial(tea.KeyDown))
-	m = mi.(model)
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
-	mi, _ = m.updateProviderSwitch(pressSpecial(tea.KeyEnter))
-	m = mi.(model)
+	m = stepKey(t, m, pressSpecial(tea.KeyDown))
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
+	m = stepKey(t, m, pressSpecial(tea.KeyEnter))
 
 	if m.sessionID != "" || m.resumeCwd != "" {
 		t.Errorf("cross-provider swap must clear session state; got s=%q r=%q",
