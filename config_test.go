@@ -24,7 +24,6 @@ func TestSaveConfig_RoundTrip(t *testing.T) {
 	home := isolateHome(t)
 	qmTrue := true
 	diffsTrue := true
-	toolOutTrue := true
 	worktreeTrue := true
 	want := askConfig{
 		Provider: "claude",
@@ -37,11 +36,11 @@ func TestSaveConfig_RoundTrip(t *testing.T) {
 			Ollama: ollamaConfig{Host: "localhost:11434", Model: "llama3"},
 		},
 		UI: uiConfig{
-			QuietMode:        &qmTrue,
-			RenderDiffs:      &diffsTrue,
-			RenderToolOutput: &toolOutTrue,
-			Worktree:         &worktreeTrue,
-			Theme:            "catppuccin-mocha",
+			QuietMode:   &qmTrue,
+			RenderDiffs: &diffsTrue,
+			ToolOutput:  string(toolOutputShort),
+			Worktree:    &worktreeTrue,
+			Theme:       "catppuccin-mocha",
 		},
 	}
 	if err := saveConfig(want); err != nil {
@@ -66,8 +65,8 @@ func TestSaveConfig_RoundTrip(t *testing.T) {
 	if got.UI.QuietMode == nil || *got.UI.QuietMode != true {
 		t.Errorf("quietMode lost: %+v", got.UI.QuietMode)
 	}
-	if got.UI.RenderToolOutput == nil || *got.UI.RenderToolOutput != true {
-		t.Errorf("renderToolOutput lost: %+v", got.UI.RenderToolOutput)
+	if got.UI.ToolOutput != string(toolOutputShort) {
+		t.Errorf("toolOutput lost: %q", got.UI.ToolOutput)
 	}
 	if got.UI.Theme != "catppuccin-mocha" {
 		t.Errorf("theme lost: %q", got.UI.Theme)
@@ -156,6 +155,61 @@ func TestClaudeProviderSettings_RoundTrip(t *testing.T) {
 	}
 	if len(got.SlashCommands) != 1 || got.SlashCommands[0].Name != "foo" {
 		t.Errorf("slash commands lost: %+v", got.SlashCommands)
+	}
+}
+
+func TestLoadConfig_MigratesLegacyRenderToolOutput(t *testing.T) {
+	// Configs written before the tri-state landed used `renderToolOutput`
+	// as a bool. Honour the user's prior choice on first load instead of
+	// silently reverting to the default.
+	cases := []struct {
+		name    string
+		raw     string
+		wantOut string
+	}{
+		{"true → short", `{"ui":{"renderToolOutput":true}}`, string(toolOutputShort)},
+		{"false → off", `{"ui":{"renderToolOutput":false}}`, string(toolOutputOff)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			home := isolateHome(t)
+			path := filepath.Join(home, ".config", "ask", "ask.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(path, []byte(c.raw), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			got, err := loadConfig()
+			if err != nil {
+				t.Fatalf("loadConfig: %v", err)
+			}
+			if got.UI.ToolOutput != c.wantOut {
+				t.Errorf("ToolOutput=%q want %q (legacy raw=%q)", got.UI.ToolOutput, c.wantOut, c.raw)
+			}
+		})
+	}
+}
+
+func TestLoadConfig_NewToolOutputWinsOverLegacy(t *testing.T) {
+	// If both keys are present (mid-migration ask.json), the new explicit
+	// setting takes precedence — never let the legacy bool downgrade a
+	// fresh choice.
+	home := isolateHome(t)
+	path := filepath.Join(home, ".config", "ask", "ask.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	raw := `{"ui":{"toolOutput":"full","renderToolOutput":false}}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if got.UI.ToolOutput != string(toolOutputFull) {
+		t.Errorf("explicit toolOutput should win; got %q", got.UI.ToolOutput)
 	}
 }
 

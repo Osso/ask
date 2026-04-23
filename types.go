@@ -95,21 +95,32 @@ type toolDiffMsg struct {
 
 // toolCallMsg reports that a tool is about to run. Emitted when the
 // provider announces the call (Claude tool_use block, Codex
-// commandExecution/mcpToolCall item). The UI renders it only when
-// `Render Tool Output` is on and quiet mode is off.
+// commandExecution/mcpToolCall item). The UI renders it according to
+// the tool-output mode and quiet flag. id/background are populated for
+// Claude tool_use blocks (codex leaves them zero); update.go uses them
+// to decide whether to suppress the matching ack result in non-full
+// modes.
 type toolCallMsg struct {
-	name  string
-	input map[string]any
-	proc  *providerProc
+	id         string
+	name       string
+	input      map[string]any
+	background bool
+	proc       *providerProc
 }
 
 // toolResultMsg carries a tool's output back to the UI. Rendered with
-// the same gate as toolCallMsg.
+// the same gate as toolCallMsg. background mirrors the originating
+// tool_use's run_in_background flag (set by the stream layer when the
+// tool_use_id matches a previously-seen background call) so the UI can
+// drop the ack-only payload in short/off modes without dropping
+// foreground results.
 type toolResultMsg struct {
-	name    string
-	output  string
-	isError bool
-	proc    *providerProc
+	toolUseID  string
+	name       string
+	output     string
+	isError    bool
+	background bool
+	proc       *providerProc
 }
 
 type stderrBuf struct {
@@ -288,7 +299,7 @@ type model struct {
 	quietMode          bool
 	cursorBlink        bool
 	renderDiffs        bool
-	renderToolOutput   bool
+	toolOutputMode     toolOutputMode
 	skipAllPermissions bool
 	worktree           bool
 	worktreeName       string

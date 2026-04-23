@@ -171,18 +171,18 @@ func TestLoadClaudeHistory_RenderToolOutput(t *testing.T) {
 			`]}}`,
 	}
 	_, id := setupHistoryFixture(t, "tooled", strings.Join(lines, "\n"))
-	// Toggle off → no tool-output entries.
-	offEntries, err := loadClaudeHistory(id, HistoryOpts{})
+	// Mode off → no tool-output entries.
+	offEntries, err := loadClaudeHistory(id, HistoryOpts{ToolOutput: toolOutputOff})
 	if err != nil {
 		t.Fatalf("off: %v", err)
 	}
 	for _, e := range offEntries {
 		if strings.Contains(e.text, "ls") || strings.Contains(e.text, "output here") {
-			t.Errorf("toggle off should hide tool output, but saw it in entry: %+v", e)
+			t.Errorf("mode off should hide tool output, but saw it in entry: %+v", e)
 		}
 	}
-	// Toggle on → call + result entries surface.
-	onEntries, err := loadClaudeHistory(id, HistoryOpts{RenderToolOutput: true})
+	// Mode full → call + result entries surface.
+	onEntries, err := loadClaudeHistory(id, HistoryOpts{ToolOutput: toolOutputFull})
 	if err != nil {
 		t.Fatalf("on: %v", err)
 	}
@@ -196,11 +196,11 @@ func TestLoadClaudeHistory_RenderToolOutput(t *testing.T) {
 		}
 	}
 	if !sawCall || !sawResult {
-		t.Errorf("replay should include both call and result when toggle on; call=%v result=%v entries=%+v",
+		t.Errorf("replay should include both call and result in full mode; call=%v result=%v entries=%+v",
 			sawCall, sawResult, onEntries)
 	}
-	// Quiet mode wins even when the tool toggle is on.
-	quietEntries, _ := loadClaudeHistory(id, HistoryOpts{RenderToolOutput: true, QuietMode: true})
+	// Quiet mode wins even when the mode is full.
+	quietEntries, _ := loadClaudeHistory(id, HistoryOpts{ToolOutput: toolOutputFull, QuietMode: true})
 	for _, e := range quietEntries {
 		if strings.Contains(e.text, "Bash") || strings.Contains(e.text, "output here") {
 			t.Errorf("quiet mode should override tool toggle; saw entry %+v", e)

@@ -276,12 +276,11 @@ func TestReadClaudeStream_ToolResultWithStructuredPatchIsDiffOnly(t *testing.T) 
 	}
 }
 
-func TestReadClaudeStream_BackgroundCallSuppressed(t *testing.T) {
-	// A tool_use with run_in_background=true and its matching tool_result
-	// (the "Command running in background with ID: …" ack) both belong off
-	// the rendered history — completion is reported separately. Pair the
-	// two events through a single stream so we exercise the id handoff
-	// from assistantToolCalls into the result-suppression set.
+func TestReadClaudeStream_BackgroundFlagPropagates(t *testing.T) {
+	// A tool_use with run_in_background=true marks the toolCallMsg as
+	// background, and the matching tool_result inherits the flag (paired
+	// by tool_use_id). update.go then decides whether to render based on
+	// the user's tri-state mode — the stream layer just propagates.
 	call := map[string]any{
 		"type": "assistant",
 		"message": map[string]any{
@@ -313,17 +312,27 @@ func TestReadClaudeStream_BackgroundCallSuppressed(t *testing.T) {
 	cb, _ := json.Marshal(call)
 	rb, _ := json.Marshal(result)
 	msgs := runStream(t, string(cb), string(rb))
+	var gotCall *toolCallMsg
+	var gotRes *toolResultMsg
 	for _, m := range msgs {
-		switch m.(type) {
-		case toolCallMsg, toolResultMsg:
-			t.Fatalf("background call should not emit tool messages; got %T msgs=%#v", m, msgs)
+		switch v := m.(type) {
+		case toolCallMsg:
+			gotCall = &v
+		case toolResultMsg:
+			gotRes = &v
 		}
+	}
+	if gotCall == nil || !gotCall.background || gotCall.id != "tool_bg" {
+		t.Fatalf("toolCallMsg missing background marker; got %+v", gotCall)
+	}
+	if gotRes == nil || !gotRes.background || gotRes.toolUseID != "tool_bg" {
+		t.Fatalf("toolResultMsg missing background marker; got %+v", gotRes)
 	}
 }
 
-func TestReadClaudeStream_NonBackgroundResultStillEmits(t *testing.T) {
-	// Sibling guard for the suppression path: a tool_result whose id was
-	// never marked background must still reach the renderer untouched.
+func TestReadClaudeStream_NonBackgroundResultLeavesFlagFalse(t *testing.T) {
+	// A tool_result whose id was never marked background must come
+	// through with background=false so update.go renders it.
 	ev := map[string]any{
 		"type": "user",
 		"message": map[string]any{
@@ -344,8 +353,14 @@ func TestReadClaudeStream_NonBackgroundResultStillEmits(t *testing.T) {
 			got = &r
 		}
 	}
-	if got == nil || got.output != "ok" {
-		t.Fatalf("foreground result missing or wrong; msgs=%#v", msgs)
+	if got == nil {
+		t.Fatalf("no toolResultMsg; msgs=%#v", msgs)
+	}
+	if got.output != "ok" {
+		t.Errorf("output=%q want ok", got.output)
+	}
+	if got.background {
+		t.Errorf("foreground result should not be flagged background; got %+v", got)
 	}
 }
 

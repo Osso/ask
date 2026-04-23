@@ -314,7 +314,7 @@ func TestUpdate_ToolDiffMsgRendersWhenEnabled(t *testing.T) {
 func TestUpdate_ToolCallMsgRendersWhenEnabled(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}
-	m.renderToolOutput = true
+	m.toolOutputMode = toolOutputFull
 	m.quietMode = false
 	m2, _ := runUpdate(t, m, toolCallMsg{
 		name:  "Read",
@@ -329,21 +329,21 @@ func TestUpdate_ToolCallMsgRendersWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestUpdate_ToolCallMsgDroppedWhenToggleOff(t *testing.T) {
+func TestUpdate_ToolCallMsgDroppedWhenOff(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}
-	m.renderToolOutput = false
+	m.toolOutputMode = toolOutputOff
 	m.quietMode = false
 	m2, _ := runUpdate(t, m, toolCallMsg{name: "Read", proc: m.proc})
 	if len(m2.history) != 0 {
-		t.Errorf("toggle off should swallow tool call; got %+v", m2.history)
+		t.Errorf("off mode should swallow tool call; got %+v", m2.history)
 	}
 }
 
 func TestUpdate_ToolCallMsgDroppedWhenQuiet(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}
-	m.renderToolOutput = true
+	m.toolOutputMode = toolOutputFull
 	m.quietMode = true
 	m2, _ := runUpdate(t, m, toolCallMsg{name: "Read", proc: m.proc})
 	if len(m2.history) != 0 {
@@ -351,10 +351,36 @@ func TestUpdate_ToolCallMsgDroppedWhenQuiet(t *testing.T) {
 	}
 }
 
+func TestUpdate_ToolCallMsgShortFiltersInputs(t *testing.T) {
+	// Short mode keeps the call but only the highest-signal input fields
+	// per the shortToolFields allowlist.
+	m := newTestModel(t, newFakeProvider())
+	m.proc = &providerProc{}
+	m.toolOutputMode = toolOutputShort
+	m.quietMode = false
+	m2, _ := runUpdate(t, m, toolCallMsg{
+		name: "Bash",
+		input: map[string]any{
+			"command":     "ls",
+			"description": "list files",
+		},
+		proc: m.proc,
+	})
+	if len(m2.history) != 1 {
+		t.Fatalf("want 1 history entry, got %d", len(m2.history))
+	}
+	if !strings.Contains(m2.history[0].text, "ls") {
+		t.Errorf("short Bash should keep command; got %q", m2.history[0].text)
+	}
+	if strings.Contains(m2.history[0].text, "description") {
+		t.Errorf("short Bash should drop description; got %q", m2.history[0].text)
+	}
+}
+
 func TestUpdate_ToolResultMsgRendersWhenEnabled(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}
-	m.renderToolOutput = true
+	m.toolOutputMode = toolOutputFull
 	m.quietMode = false
 	m2, _ := runUpdate(t, m, toolResultMsg{output: "hello\nworld", proc: m.proc})
 	if len(m2.history) != 1 {
@@ -365,25 +391,55 @@ func TestUpdate_ToolResultMsgRendersWhenEnabled(t *testing.T) {
 	}
 }
 
-func TestUpdate_ToolResultMsgDroppedWhenToggleOff(t *testing.T) {
+func TestUpdate_ToolResultMsgDroppedWhenOff(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}
-	m.renderToolOutput = false
+	m.toolOutputMode = toolOutputOff
 	m.quietMode = false
 	m2, _ := runUpdate(t, m, toolResultMsg{output: "hello", proc: m.proc})
 	if len(m2.history) != 0 {
-		t.Errorf("toggle off should swallow result; got %+v", m2.history)
+		t.Errorf("off mode should swallow result; got %+v", m2.history)
 	}
 }
 
 func TestUpdate_ToolResultMsgDroppedWhenQuiet(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}
-	m.renderToolOutput = true
+	m.toolOutputMode = toolOutputFull
 	m.quietMode = true
 	m2, _ := runUpdate(t, m, toolResultMsg{output: "hello", proc: m.proc})
 	if len(m2.history) != 0 {
 		t.Errorf("quiet mode should swallow result; got %+v", m2.history)
+	}
+}
+
+func TestUpdate_BackgroundResultGatedByMode(t *testing.T) {
+	// The Bash background-launch ack is hidden in short mode (the user's
+	// stated reason for adding the flag) but resurfaces in full mode for
+	// users who want the full audit trail.
+	cases := []struct {
+		mode toolOutputMode
+		want int
+	}{
+		{toolOutputFull, 1},
+		{toolOutputShort, 0},
+		{toolOutputOff, 0},
+	}
+	for _, c := range cases {
+		t.Run(string(c.mode), func(t *testing.T) {
+			m := newTestModel(t, newFakeProvider())
+			m.proc = &providerProc{}
+			m.toolOutputMode = c.mode
+			m.quietMode = false
+			m2, _ := runUpdate(t, m, toolResultMsg{
+				output:     "Command running in background with ID: x",
+				background: true,
+				proc:       m.proc,
+			})
+			if len(m2.history) != c.want {
+				t.Errorf("mode=%q got %d entries want %d (history=%+v)", c.mode, len(m2.history), c.want, m2.history)
+			}
+		})
 	}
 }
 

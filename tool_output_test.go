@@ -6,7 +6,7 @@ import (
 )
 
 func TestRenderToolCallBlock_IncludesNameAndInputs(t *testing.T) {
-	out := renderToolCallBlock("Read", map[string]any{"file_path": "/x.go"})
+	out := renderToolCallBlock("Read", map[string]any{"file_path": "/x.go"}, toolOutputFull)
 	if !strings.Contains(out, "Read") {
 		t.Errorf("block missing tool name: %q", out)
 	}
@@ -16,7 +16,7 @@ func TestRenderToolCallBlock_IncludesNameAndInputs(t *testing.T) {
 }
 
 func TestRenderToolCallBlock_EmptyNameFallsBack(t *testing.T) {
-	out := renderToolCallBlock("", nil)
+	out := renderToolCallBlock("", nil, toolOutputFull)
 	if !strings.Contains(out, "tool") {
 		t.Errorf("empty name should fall back to 'tool'; got %q", out)
 	}
@@ -26,8 +26,8 @@ func TestRenderToolCallBlock_SortedKeys(t *testing.T) {
 	// Maps randomize iteration; the renderer sorts keys so successive
 	// renders of the same payload stay byte-identical.
 	input := map[string]any{"zeta": 1, "alpha": 2, "mu": 3}
-	a := renderToolCallBlock("X", input)
-	b := renderToolCallBlock("X", input)
+	a := renderToolCallBlock("X", input, toolOutputFull)
+	b := renderToolCallBlock("X", input, toolOutputFull)
 	if a != b {
 		t.Errorf("renderer must be deterministic across calls")
 	}
@@ -37,6 +37,68 @@ func TestRenderToolCallBlock_SortedKeys(t *testing.T) {
 	zi := strings.Index(a, "zeta:")
 	if ai < 0 || mi < 0 || zi < 0 || !(ai < mi && mi < zi) {
 		t.Errorf("keys not in sorted order: %q", a)
+	}
+}
+
+func TestRenderToolCallBlock_ShortFiltersToAllowlist(t *testing.T) {
+	// Bash in short mode shows only command, hides other inputs the user
+	// asked the renderer to elide.
+	input := map[string]any{
+		"command":           "ls /tmp",
+		"description":       "list tmp",
+		"run_in_background": true,
+	}
+	out := renderToolCallBlock("Bash", input, toolOutputShort)
+	if !strings.Contains(out, "command") || !strings.Contains(out, "ls /tmp") {
+		t.Errorf("short Bash should keep command; got %q", out)
+	}
+	if strings.Contains(out, "description") || strings.Contains(out, "run_in_background") {
+		t.Errorf("short Bash should drop non-allowlisted inputs; got %q", out)
+	}
+}
+
+func TestRenderToolCallBlock_ShortUnknownToolHeaderOnly(t *testing.T) {
+	// Tools without an allowlist entry render as just the header in
+	// short mode — users still see something fired but no payload spam.
+	out := renderToolCallBlock("MysteryMCP", map[string]any{"foo": "bar", "baz": 42}, toolOutputShort)
+	if !strings.Contains(out, "MysteryMCP") {
+		t.Errorf("header missing: %q", out)
+	}
+	if strings.Contains(out, "foo") || strings.Contains(out, "baz") {
+		t.Errorf("short mode should drop unknown-tool inputs; got %q", out)
+	}
+}
+
+func TestNextToolOutputMode_Cycles(t *testing.T) {
+	// /config row cycles full → short → off → full. Unknown values reset
+	// to the default so the picker can never wedge.
+	if got := nextToolOutputMode(toolOutputFull); got != toolOutputShort {
+		t.Errorf("full → %q want %q", got, toolOutputShort)
+	}
+	if got := nextToolOutputMode(toolOutputShort); got != toolOutputOff {
+		t.Errorf("short → %q want %q", got, toolOutputOff)
+	}
+	if got := nextToolOutputMode(toolOutputOff); got != toolOutputFull {
+		t.Errorf("off → %q want %q", got, toolOutputFull)
+	}
+	if got := nextToolOutputMode("garbage"); got != defaultToolOutputMode {
+		t.Errorf("garbage → %q want %q", got, defaultToolOutputMode)
+	}
+}
+
+func TestParseToolOutputMode_Defaults(t *testing.T) {
+	// Empty and unrecognized values fall through to the default so a typo
+	// in ask.json never silences tool output entirely.
+	if got := parseToolOutputMode(""); got != defaultToolOutputMode {
+		t.Errorf("empty should default; got %q", got)
+	}
+	if got := parseToolOutputMode("loud"); got != defaultToolOutputMode {
+		t.Errorf("unknown should default; got %q", got)
+	}
+	for _, v := range []toolOutputMode{toolOutputFull, toolOutputShort, toolOutputOff} {
+		if got := parseToolOutputMode(string(v)); got != v {
+			t.Errorf("known %q lost: got %q", v, got)
+		}
 	}
 }
 

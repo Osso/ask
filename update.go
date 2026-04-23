@@ -131,8 +131,8 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		if msg.proc != m.proc {
 			return m, nil
 		}
-		if m.renderToolOutput && !m.quietMode {
-			m.appendHistory(renderToolCallBlock(msg.name, msg.input))
+		if m.shouldRenderToolCall(msg) {
+			m.appendHistory(renderToolCallBlock(msg.name, msg.input, m.toolOutputMode))
 		}
 		if m.streamCh != nil {
 			return m, nextStreamCmd(m.streamCh)
@@ -143,7 +143,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		if msg.proc != m.proc {
 			return m, nil
 		}
-		if m.renderToolOutput && !m.quietMode {
+		if m.shouldRenderToolResult(msg) {
 			m.appendHistory(renderToolResultBlock(msg.output, msg.isError))
 		}
 		if m.streamCh != nil {
@@ -926,9 +926,9 @@ func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				fmt.Sprintf("loading session %s…", short(entry.id)))))
 			return m, loadHistoryCmd(m.provider, entry.id,
 				HistoryOpts{
-					RenderDiffs:      m.renderDiffs,
-					RenderToolOutput: m.renderToolOutput,
-					QuietMode:        m.quietMode,
+					RenderDiffs: m.renderDiffs,
+					ToolOutput:  m.toolOutputMode,
+					QuietMode:   m.quietMode,
 				}, false)
 		}
 	}

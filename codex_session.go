@@ -262,16 +262,16 @@ func loadCodexHistory(sessionID string, opts HistoryOpts) ([]historyEntry, error
 				lastAssistantIdx = len(entries) - 1
 			}
 		case "function_call", "custom_tool_call":
-			if !opts.RenderToolOutput || opts.QuietMode {
+			if opts.QuietMode || opts.ToolOutput == toolOutputOff {
 				continue
 			}
 			name, input := codexRolloutCallSummary(rec.Payload)
 			entries = append(entries, historyEntry{
 				kind: histPrerendered,
-				text: renderToolCallBlock(name, input),
+				text: renderToolCallBlock(name, input, opts.ToolOutput),
 			})
 		case "function_call_output":
-			if !opts.RenderToolOutput || opts.QuietMode {
+			if opts.QuietMode || opts.ToolOutput == toolOutputOff {
 				continue
 			}
 			output, isError := codexRolloutOutputSummary(rec.Payload)

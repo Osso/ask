@@ -303,13 +303,12 @@ func readClaudeStream(stdout io.Reader, proc *providerProc, ch chan tea.Msg) {
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 1<<20), 1<<22)
 	var pending providerResult
-	// Tool calls launched with run_in_background=true (Bash, Agent) are
-	// hidden from the rendered history: their ack body ("Command running
-	// in background with ID: …") and the call line itself carry no
-	// information the user can act on — completion arrives via
-	// task_notification, which already has its own UX path. Track the
-	// suppressed tool_use ids here so we can drop the matching
-	// tool_result when it arrives.
+	// Tool calls launched with run_in_background=true (Bash, Agent) need
+	// to be marked so update.go can gate their ack body ("Command
+	// running in background with ID: …") on the tool-output mode. The
+	// tool_result block itself doesn't carry the flag, so we track the
+	// originating tool_use ids here and stamp the matching toolResultMsg
+	// as background when it arrives.
 	bgIDs := map[string]bool{}
 	for sc.Scan() {
 		var ev map[string]any
@@ -357,13 +356,16 @@ func readClaudeStream(stdout io.Reader, proc *providerProc, ch chan tea.Msg) {
 				ch <- todoUpdatedMsg{todos: todos, proc: proc}
 			}
 			for _, call := range assistantToolCalls(ev) {
-				if call.background {
-					if call.id != "" {
-						bgIDs[call.id] = true
-					}
-					continue
+				if call.background && call.id != "" {
+					bgIDs[call.id] = true
 				}
-				ch <- toolCallMsg{name: call.name, input: call.input, proc: proc}
+				ch <- toolCallMsg{
+					id:         call.id,
+					name:       call.name,
+					input:      call.input,
+					background: call.background,
+					proc:       proc,
+				}
 			}
 			if text := assistantText(ev); text != "" {
 				ch <- assistantTextMsg{text: text, proc: proc}
@@ -376,11 +378,19 @@ func readClaudeStream(stdout io.Reader, proc *providerProc, ch chan tea.Msg) {
 				continue
 			}
 			if res, ok := userToolResult(ev); ok {
+				background := false
 				if res.toolUseID != "" && bgIDs[res.toolUseID] {
+					background = true
 					delete(bgIDs, res.toolUseID)
-					continue
 				}
-				ch <- toolResultMsg{name: res.name, output: res.output, isError: res.isError, proc: proc}
+				ch <- toolResultMsg{
+					toolUseID:  res.toolUseID,
+					name:       res.name,
+					output:     res.output,
+					isError:    res.isError,
+					background: background,
+					proc:       proc,
+				}
 			}
 		case "stream_event":
 			if streamEventEndTurn(ev) {

@@ -49,22 +49,22 @@ func TestCodex_LoadHistory_RenderToolOutput(t *testing.T) {
 	}
 	writeCodexRollout(t, home, "tools-aaaaaaaa", cwd, items, time.Now())
 
-	// Toggle off → no tool entries.
-	off, err := loadCodexHistory("tools-aaaaaaaa", HistoryOpts{})
+	// Mode off → no tool entries.
+	off, err := loadCodexHistory("tools-aaaaaaaa", HistoryOpts{ToolOutput: toolOutputOff})
 	if err != nil {
 		t.Fatalf("off: %v", err)
 	}
 	for _, e := range off {
 		if strings.Contains(e.text, "pwd") && !strings.Contains(e.text, "run pwd") {
-			t.Errorf("toggle off leaked call: %+v", e)
+			t.Errorf("mode off leaked call: %+v", e)
 		}
 		if strings.Contains(e.text, "/tmp/here") {
-			t.Errorf("toggle off leaked output: %+v", e)
+			t.Errorf("mode off leaked output: %+v", e)
 		}
 	}
 
-	// Toggle on → call + output visible.
-	on, err := loadCodexHistory("tools-aaaaaaaa", HistoryOpts{RenderToolOutput: true})
+	// Mode full → call + output visible.
+	on, err := loadCodexHistory("tools-aaaaaaaa", HistoryOpts{ToolOutput: toolOutputFull})
 	if err != nil {
 		t.Fatalf("on: %v", err)
 	}
@@ -81,8 +81,8 @@ func TestCodex_LoadHistory_RenderToolOutput(t *testing.T) {
 		t.Errorf("call=%v out=%v entries=%+v", sawCall, sawOut, on)
 	}
 
-	// Quiet mode suppresses even when toggle on.
-	quiet, _ := loadCodexHistory("tools-aaaaaaaa", HistoryOpts{RenderToolOutput: true, QuietMode: true})
+	// Quiet mode suppresses even when the mode is full.
+	quiet, _ := loadCodexHistory("tools-aaaaaaaa", HistoryOpts{ToolOutput: toolOutputFull, QuietMode: true})
 	for _, e := range quiet {
 		if strings.Contains(e.text, "exec_command") || strings.Contains(e.text, "/tmp/here") {
 			t.Errorf("quiet should suppress tool entries; saw %+v", e)

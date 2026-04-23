@@ -148,11 +148,13 @@ type ProviderSessionArgs struct {
 	ResumeCwd          string
 }
 
-// HistoryOpts narrows what the history replay renders.
+// HistoryOpts narrows what the history replay renders. ToolOutput is
+// the same tri-state ("full" | "short" | "off") the live UI honours so
+// replay matches whatever the user currently sees in fresh sessions.
 type HistoryOpts struct {
-	RenderDiffs      bool
-	RenderToolOutput bool
-	QuietMode        bool
+	RenderDiffs bool
+	ToolOutput  toolOutputMode
+	QuietMode   bool
 }
 
 // providerProc is an opaque subprocess handle. The UI uses it as an

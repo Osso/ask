@@ -100,6 +100,11 @@ func loadClaudeHistory(sessionID string, opts HistoryOpts) ([]historyEntry, erro
 	sc.Buffer(make([]byte, 1<<20), 1<<22)
 	var entries []historyEntry
 	lastAssistantIdx := -1
+	mode := opts.ToolOutput
+	showTools := !opts.QuietMode && mode != toolOutputOff
+	// Mirror readClaudeStream's bgIDs map so replay drops the same
+	// background-launch acks live mode hides.
+	bgIDs := map[string]bool{}
 	for sc.Scan() {
 		var rec map[string]any
 		if json.Unmarshal(sc.Bytes(), &rec) != nil {
@@ -136,8 +141,14 @@ func loadClaudeHistory(sessionID string, opts HistoryOpts) ([]historyEntry, erro
 					continue
 				}
 			}
-			if opts.RenderToolOutput && !opts.QuietMode {
+			if showTools {
 				if res, ok := userToolResult(rec); ok {
+					if res.toolUseID != "" && bgIDs[res.toolUseID] {
+						delete(bgIDs, res.toolUseID)
+						if mode != toolOutputFull {
+							continue
+						}
+					}
 					entries = append(entries, historyEntry{
 						kind: histPrerendered,
 						text: renderToolResultBlock(res.output, res.isError),
@@ -152,11 +163,14 @@ func loadClaudeHistory(sessionID string, opts HistoryOpts) ([]historyEntry, erro
 			if !ok {
 				continue
 			}
-			if opts.RenderToolOutput && !opts.QuietMode {
+			if showTools {
 				for _, call := range assistantToolCalls(rec) {
+					if call.background && call.id != "" {
+						bgIDs[call.id] = true
+					}
 					entries = append(entries, historyEntry{
 						kind: histPrerendered,
-						text: renderToolCallBlock(call.name, call.input),
+						text: renderToolCallBlock(call.name, call.input, mode),
 					})
 				}
 			}

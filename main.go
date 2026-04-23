@@ -109,7 +109,7 @@ func newTab(id int, cfg askConfig) (*model, error) {
 		quietMode:          cfg.UI.QuietMode == nil || *cfg.UI.QuietMode,
 		cursorBlink:        cursorBlink,
 		renderDiffs:        cfg.UI.RenderDiffs == nil || *cfg.UI.RenderDiffs,
-		renderToolOutput:   cfg.UI.RenderToolOutput != nil && *cfg.UI.RenderToolOutput,
+		toolOutputMode:     parseToolOutputMode(cfg.UI.ToolOutput),
 		skipAllPermissions: cfg.UI.SkipAllPermissions != nil && *cfg.UI.SkipAllPermissions,
 		worktree:           cfg.UI.Worktree != nil && *cfg.UI.Worktree,
 		historyIdx:         -1,

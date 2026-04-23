@@ -27,10 +27,7 @@ func (m model) configItemsAll() []configItem {
 	if m.renderDiffs {
 		diffs = "on"
 	}
-	toolOut := "off"
-	if m.renderToolOutput {
-		toolOut = "on"
-	}
+	toolOut := string(m.toolOutputMode)
 	skipPerms := "off"
 	if m.skipAllPermissions {
 		skipPerms = "on"
@@ -52,7 +49,7 @@ func (m model) configItemsAll() []configItem {
 		{"Quiet Mode", quiet, "quiet"},
 		{"Cursor Blink", blink, "cursorBlink"},
 		{"Render Diffs", diffs, "renderDiffs"},
-		{"Render Tool Output", toolOut, "renderToolOutput"},
+		{"Tool Output", toolOut, "toolOutput"},
 		{"Skip All Permissions", skipPerms, "skipAllPermissions"},
 		{"Worktree", worktree, "worktree"},
 		{"Theme", m.themeName, "theme"},
@@ -67,9 +64,9 @@ func (m model) refreshHistoryCmd() tea.Cmd {
 	}
 	return loadHistoryCmd(m.provider, m.sessionID,
 		HistoryOpts{
-			RenderDiffs:      m.renderDiffs,
-			RenderToolOutput: m.renderToolOutput,
-			QuietMode:        m.quietMode,
+			RenderDiffs: m.renderDiffs,
+			ToolOutput:  m.toolOutputMode,
+			QuietMode:   m.quietMode,
 		}, true)
 }
 
@@ -163,11 +160,10 @@ func (m model) updateConfigModal(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 					debugLog("saveConfig err: %v", err)
 				}
 				return m, m.refreshHistoryCmd()
-			case "renderToolOutput":
-				m.renderToolOutput = !m.renderToolOutput
-				v := m.renderToolOutput
+			case "toolOutput":
+				m.toolOutputMode = nextToolOutputMode(m.toolOutputMode)
 				cfg, _ := loadConfig()
-				cfg.UI.RenderToolOutput = &v
+				cfg.UI.ToolOutput = string(m.toolOutputMode)
 				if err := saveConfig(cfg); err != nil {
 					debugLog("saveConfig err: %v", err)
 				}

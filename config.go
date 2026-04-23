@@ -34,10 +34,13 @@ type ollamaConfig struct {
 }
 
 type uiConfig struct {
-	QuietMode          *bool  `json:"quietMode,omitempty"`
-	CursorBlink        *bool  `json:"cursorBlink,omitempty"`
-	RenderDiffs        *bool  `json:"renderDiffs,omitempty"`
-	RenderToolOutput   *bool  `json:"renderToolOutput,omitempty"`
+	QuietMode   *bool `json:"quietMode,omitempty"`
+	CursorBlink *bool `json:"cursorBlink,omitempty"`
+	RenderDiffs *bool `json:"renderDiffs,omitempty"`
+	// ToolOutput is the tri-state for tool-call rendering:
+	// "full" | "short" | "off". Empty string defers to
+	// defaultToolOutputMode.
+	ToolOutput         string `json:"toolOutput,omitempty"`
 	SkipAllPermissions *bool  `json:"skipAllPermissions,omitempty"`
 	Worktree           *bool  `json:"worktree,omitempty"`
 	Theme              string `json:"theme,omitempty"`
@@ -65,7 +68,34 @@ func loadConfig() (askConfig, error) {
 		return cfg, err
 	}
 	_ = json.Unmarshal(data, &cfg)
+	migrateLegacyToolOutput(&cfg, data)
 	return cfg, nil
+}
+
+// migrateLegacyToolOutput folds the deprecated "renderToolOutput" bool
+// into the new tri-state "toolOutput" string so users who upgrade don't
+// see their tool rendering reset on first launch. Runs only when the
+// new key is absent — an explicit new setting always wins.
+func migrateLegacyToolOutput(cfg *askConfig, data []byte) {
+	if cfg.UI.ToolOutput != "" {
+		return
+	}
+	var legacy struct {
+		UI struct {
+			RenderToolOutput *bool `json:"renderToolOutput,omitempty"`
+		} `json:"ui,omitempty"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return
+	}
+	if legacy.UI.RenderToolOutput == nil {
+		return
+	}
+	if *legacy.UI.RenderToolOutput {
+		cfg.UI.ToolOutput = string(toolOutputShort)
+	} else {
+		cfg.UI.ToolOutput = string(toolOutputOff)
+	}
 }
 
 func saveConfig(cfg askConfig) error {
