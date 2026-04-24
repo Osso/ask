@@ -13,17 +13,27 @@ import (
 	"syscall"
 )
 
-// askLockPrefix tags worktree locks ask owns. The suffix is the ask PID so
-// prune can tell its own / other live / stale locks apart.
+// askLockPrefix tags worktree/workspace locks ask owns. The suffix is the ask
+// PID so prune can tell its own / other live / stale locks apart.
 const askLockPrefix = "ask:"
 
-// ensureWorktreeGitignore makes sure the git checkout at cwd ignores
-// `.claude/worktrees/`, the parent of every worktree `claude --worktree`
-// spawns. No-op when cwd is not itself a git checkout (we don't walk
-// upward — if the user launched ask in a subdir of a repo, that's their
-// call) or when a rule already covers the path.
+const jjWorkspaceLockFile = "ask-workspace-lock"
+
+type workspaceBackend int
+
+const (
+	workspaceBackendNone workspaceBackend = iota
+	workspaceBackendGit
+	workspaceBackendJJ
+)
+
+// ensureWorktreeGitignore makes sure the repo at cwd ignores
+// `.claude/worktrees/`, the parent of every ask-managed workspace. JJ honors
+// `.gitignore` files too, so this applies to both git and jujutsu checkouts.
+// No-op when cwd is not itself a repo root (we don't walk upward) or when a
+// rule already covers the path.
 func ensureWorktreeGitignore() {
-	if !inGitCheckout() {
+	if worktreeBackendAt(getwdOrEmpty()) == workspaceBackendNone {
 		return
 	}
 	path := ".gitignore"
@@ -47,8 +57,8 @@ func ensureWorktreeGitignore() {
 	debugLog("worktree gitignore added .claude/worktrees/ to %s", path)
 }
 
-// inGitCheckout returns true when cwd itself contains `.git` (directory
-// in a normal checkout, regular file in a worktree / submodule).
+// inGitCheckout returns true when cwd itself contains `.git` (directory in a
+// normal checkout, regular file in a worktree / submodule).
 func inGitCheckout() bool {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -63,6 +73,32 @@ func inGitCheckoutAt(cwd string) bool {
 	}
 	_, err := os.Stat(filepath.Join(cwd, ".git"))
 	return err == nil
+}
+
+func inJujutsuCheckoutAt(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(cwd, ".jj"))
+	return err == nil && info.IsDir()
+}
+
+func worktreeBackendAt(cwd string) workspaceBackend {
+	if inJujutsuCheckoutAt(cwd) {
+		return workspaceBackendJJ
+	}
+	if inGitCheckoutAt(cwd) {
+		return workspaceBackendGit
+	}
+	return workspaceBackendNone
+}
+
+func getwdOrEmpty() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cwd
 }
 
 // worktreeNameFromCwd returns the worktree directory name when cwd is inside
@@ -80,22 +116,16 @@ func worktreeNameFromCwd(cwd string) string {
 	return rest
 }
 
-// pruneWorktrees removes every sibling under `.claude/worktrees/` using
-// `git worktree remove` (no --force) and then deletes the matching
-// `worktree-<name>` branch with `git branch -d`. Both commands refuse to
-// drop uncommitted / unmerged work, so this cannot lose changes. No-op
-// outside a cwd-level git checkout, and never runs when ask itself is
-// launched inside one of those worktrees.
-//
-// Lock-aware: a worktree held by another running ask (`ask:<live-pid>`) is
-// skipped; a stale `ask:<dead-pid>` lock or our own PID's lock is unlocked
-// and then removed; a non-ask lock is left alone.
+// pruneWorktrees removes every sibling under `.claude/worktrees/`. Git uses
+// `git worktree remove` plus branch deletion; JJ uses `jj workspace forget`
+// plus directory removal after verifying the workspace has no pending diff. In
+// both modes we skip workspaces locked by another live ask or by a foreign
+// non-ask reason, and we never prune when ask itself is launched inside one of
+// those workspaces.
 func pruneWorktrees() {
-	if !inGitCheckout() {
-		return
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
+	cwd := getwdOrEmpty()
+	backend := worktreeBackendAt(cwd)
+	if backend == workspaceBackendNone {
 		return
 	}
 	if worktreeNameFromCwd(cwd) != "" {
@@ -113,7 +143,8 @@ func pruneWorktrees() {
 		if !e.IsDir() {
 			continue
 		}
-		path := filepath.Join(cwd, ".claude", "worktrees", e.Name())
+		name := e.Name()
+		path := filepath.Join(cwd, ".claude", "worktrees", name)
 		if reason, locked := locks[path]; locked {
 			if !lockIsAskFormat(reason) {
 				debugLog("worktree skip %s: foreign lock %q", path, reason)
@@ -123,37 +154,21 @@ func pruneWorktrees() {
 				debugLog("worktree skip %s: live ask %q", path, reason)
 				continue
 			}
-			ul := exec.Command("git", "worktree", "unlock", path)
-			ul.Dir = cwd
-			if out, err := ul.CombinedOutput(); err != nil {
-				debugLog("worktree unlock %s: %v (%s)", path, err, bytes.TrimSpace(out))
+			if err := unlockWorktreeAt(cwd, path); err != nil {
+				debugLog("worktree unlock %s: %v", path, err)
 				continue
 			}
 			debugLog("worktree unlocked stale %s reason=%q", path, reason)
 		}
-		rm := exec.Command("git", "worktree", "remove", path)
-		rm.Dir = cwd
-		if out, err := rm.CombinedOutput(); err != nil {
-			debugLog("worktree remove %s: %v (%s)", path, err, bytes.TrimSpace(out))
+		if err := removeWorktreeAt(cwd, name, path); err != nil {
+			debugLog("worktree remove %s: %v", path, err)
 			continue
 		}
-		debugLog("worktree removed %s", path)
-		branch := "worktree-" + e.Name()
-		br := exec.Command("git", "branch", "-d", branch)
-		br.Dir = cwd
-		if out, err := br.CombinedOutput(); err != nil {
-			debugLog("branch delete %s: %v (%s)", branch, err, bytes.TrimSpace(out))
-			continue
-		}
-		debugLog("branch deleted %s", branch)
 	}
 }
 
 // lockWorktree tags `.claude/worktrees/<name>` with `ask:<pid>` so other ask
 // instances pruning on startup / shutdown see it's owned and skip it.
-// Best-effort: a relock attempt on an already-locked worktree fails harmlessly
-// (git leaves the existing lock intact), which is fine — the existing lock is
-// still ours from earlier in this ask's life.
 func lockWorktree(name string) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -163,24 +178,49 @@ func lockWorktree(name string) {
 }
 
 func lockWorktreeAt(cwd, name string) {
-	if name == "" || !inGitCheckoutAt(cwd) {
+	if name == "" {
 		return
 	}
 	path := filepath.Join(cwd, ".claude", "worktrees", name)
 	reason := fmt.Sprintf("%s%d", askLockPrefix, os.Getpid())
-	cmd := exec.Command("git", "worktree", "lock", "--reason", reason, path)
-	cmd.Dir = cwd
-	if out, err := cmd.CombinedOutput(); err != nil {
-		debugLog("worktree lock %s: %v (%s)", path, err, bytes.TrimSpace(out))
+	switch worktreeBackendAt(cwd) {
+	case workspaceBackendGit:
+		cmd := exec.Command("git", "worktree", "lock", "--reason", reason, path)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			debugLog("worktree lock %s: %v (%s)", path, err, bytes.TrimSpace(out))
+			return
+		}
+	case workspaceBackendJJ:
+		if err := os.MkdirAll(filepath.Dir(jjWorkspaceLockPath(path)), 0o755); err != nil {
+			debugLog("jj workspace lock mkdir %s: %v", path, err)
+			return
+		}
+		if err := os.WriteFile(jjWorkspaceLockPath(path), []byte(reason+"\n"), 0o644); err != nil {
+			debugLog("jj workspace lock %s: %v", path, err)
+			return
+		}
+	default:
 		return
 	}
 	debugLog("worktree locked %s reason=%s", path, reason)
 }
 
 // worktreeLocks returns absolute path → lock reason for every locked worktree
-// git knows about. Unlocked entries are omitted. Reason is the empty string
-// when the lock carries no message.
+// ask manages. Unlocked entries are omitted. Reason is the empty string when
+// the lock carries no message.
 func worktreeLocks(cwd string) map[string]string {
+	switch worktreeBackendAt(cwd) {
+	case workspaceBackendGit:
+		return gitWorktreeLocks(cwd)
+	case workspaceBackendJJ:
+		return jjWorktreeLocks(cwd)
+	default:
+		return nil
+	}
+}
+
+func gitWorktreeLocks(cwd string) map[string]string {
 	cmd := exec.Command("git", "worktree", "list", "--porcelain")
 	cmd.Dir = cwd
 	out, err := cmd.Output()
@@ -217,8 +257,150 @@ func worktreeLocks(cwd string) map[string]string {
 	return locks
 }
 
-// lockIsAskFormat reports whether reason looks like `ask:<int>` regardless
-// of whether that PID is alive.
+func jjWorktreeLocks(cwd string) map[string]string {
+	entries, err := os.ReadDir(filepath.Join(cwd, ".claude", "worktrees"))
+	if err != nil {
+		if !os.IsNotExist(err) {
+			debugLog("jj workspace lock readdir: %v", err)
+		}
+		return nil
+	}
+	locks := map[string]string{}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		path := filepath.Join(cwd, ".claude", "worktrees", e.Name())
+		data, err := os.ReadFile(jjWorkspaceLockPath(path))
+		if err != nil {
+			if !os.IsNotExist(err) {
+				debugLog("jj workspace lock read %s: %v", path, err)
+			}
+			continue
+		}
+		locks[path] = strings.TrimSpace(string(data))
+	}
+	return locks
+}
+
+func unlockWorktreeAt(cwd, path string) error {
+	switch worktreeBackendAt(cwd) {
+	case workspaceBackendGit:
+		cmd := exec.Command("git", "worktree", "unlock", path)
+		cmd.Dir = cwd
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git worktree unlock %s: %w (%s)", path, err, bytes.TrimSpace(out))
+		}
+	case workspaceBackendJJ:
+		if err := os.Remove(jjWorkspaceLockPath(path)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove jj workspace lock %s: %w", path, err)
+		}
+	default:
+	}
+	return nil
+}
+
+func removeWorktreeAt(cwd, name, path string) error {
+	switch worktreeBackendAt(cwd) {
+	case workspaceBackendGit:
+		rm := exec.Command("git", "worktree", "remove", path)
+		rm.Dir = cwd
+		if out, err := rm.CombinedOutput(); err != nil {
+			return fmt.Errorf("git worktree remove %s: %w (%s)", path, err, bytes.TrimSpace(out))
+		}
+		debugLog("worktree removed %s", path)
+		branch := "worktree-" + name
+		br := exec.Command("git", "branch", "-d", branch)
+		br.Dir = cwd
+		if out, err := br.CombinedOutput(); err != nil {
+			return fmt.Errorf("git branch -d %s: %w (%s)", branch, err, bytes.TrimSpace(out))
+		}
+		debugLog("branch deleted %s", branch)
+		return nil
+	case workspaceBackendJJ:
+		if err := jjWorkspaceUpdateStale(path); err != nil {
+			return err
+		}
+		dirty, err := jjWorkspaceHasChanges(path)
+		if err != nil {
+			return err
+		}
+		if dirty {
+			return fmt.Errorf("jj workspace %s has working-copy changes", name)
+		}
+		workspaces, err := jjWorkspaceTargets(cwd)
+		if err != nil {
+			return err
+		}
+		if _, ok := workspaces[name]; ok {
+			cmd := exec.Command("jj", "--ignore-working-copy", "workspace", "forget", name)
+			cmd.Dir = cwd
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("jj workspace forget %s: %w\n%s", name, err, bytes.TrimSpace(out))
+			}
+			debugLog("jj workspace forgot %s", name)
+		}
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("remove jj workspace dir %s: %w", path, err)
+		}
+		debugLog("jj workspace removed %s", path)
+		return nil
+	default:
+		return nil
+	}
+}
+
+func jjWorkspaceTargets(cwd string) (map[string]string, error) {
+	cmd := exec.Command("jj", "--ignore-working-copy", "workspace", "list", "-T", "name ++ \"|\" ++ target.commit_id() ++ \"\\n\"")
+	cmd.Dir = cwd
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("jj workspace list: %w\n%s", err, bytes.TrimSpace(out))
+	}
+	workspaces := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		name, target, ok := strings.Cut(line, "|")
+		if !ok || name == "" || target == "" {
+			return nil, fmt.Errorf("parse jj workspace list line %q", line)
+		}
+		workspaces[name] = target
+	}
+	return workspaces, nil
+}
+
+func jjWorkspaceHasChanges(path string) (bool, error) {
+	cmd := exec.Command("jj", "diff", "--summary", "--color=never", "--no-pager")
+	cmd.Dir = path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("jj diff --summary %s: %w\n%s", path, err, bytes.TrimSpace(out))
+	}
+	return strings.TrimSpace(string(out)) != "", nil
+}
+
+func jjWorkspaceUpdateStale(path string) error {
+	cmd := exec.Command("jj", "workspace", "update-stale")
+	cmd.Dir = path
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("jj workspace update-stale %s: %w\n%s", path, err, bytes.TrimSpace(out))
+	}
+	if msg := strings.TrimSpace(string(out)); msg != "" {
+		debugLog("jj workspace update-stale %s: %s", path, msg)
+	}
+	return nil
+}
+
+func jjWorkspaceLockPath(path string) string {
+	return filepath.Join(path, ".jj", jjWorkspaceLockFile)
+}
+
+// lockIsAskFormat reports whether reason looks like `ask:<int>` regardless of
+// whether that PID is alive.
 func lockIsAskFormat(reason string) bool {
 	if !strings.HasPrefix(reason, askLockPrefix) {
 		return false
@@ -244,18 +426,10 @@ func lockHeldByLiveOtherAsk(reason string) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
-// createWorktree creates a fresh
-// `.claude/worktrees/<adjective>-<verb>-<noun>` directory and matching
-// `worktree-<name>` branch, then locks the worktree as ours. Provider
-// identity isn't encoded in the name — worktrees are shared across
-// provider swaps inside a tab, and pruneWorktrees keys on the
-// `ask:<pid>` lock reason rather than the directory name. Returns the
-// absolute path for the subprocess to run in and the display name for
-// the chip.
-//
-// No-op when we're not inside a git checkout; the caller is expected
-// to guard on inGitCheckout() before calling. Errors surface git's
-// combined stderr when `git worktree add` fails (e.g., dirty tree).
+// createWorktree creates a fresh `.claude/worktrees/<adjective>-<verb>-<noun>`
+// directory. Git repos get `git worktree add`; JJ repos get `jj workspace add`
+// with the same name and path. Returns the absolute path for the subprocess to
+// run in and the display name for the chip.
 func createWorktree() (path, name string, err error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -270,37 +444,44 @@ func createWorktreeAt(cwd string) (path, name string, err error) {
 	if err := os.MkdirAll(filepath.Join(cwd, ".claude", "worktrees"), 0o755); err != nil {
 		return "", "", fmt.Errorf("prepare worktrees dir: %w", err)
 	}
-	branch := "worktree-" + name
-	add := exec.Command("git", "worktree", "add", "-b", branch, path)
-	add.Dir = cwd
-	if out, err := add.CombinedOutput(); err != nil {
-		return "", "", fmt.Errorf("git worktree add %s: %w\n%s",
-			path, err, bytes.TrimSpace(out))
+	switch worktreeBackendAt(cwd) {
+	case workspaceBackendGit:
+		branch := "worktree-" + name
+		add := exec.Command("git", "worktree", "add", "-b", branch, path)
+		add.Dir = cwd
+		if out, err := add.CombinedOutput(); err != nil {
+			return "", "", fmt.Errorf("git worktree add %s: %w\n%s",
+				path, err, bytes.TrimSpace(out))
+		}
+		debugLog("worktree created at %s on branch %s", path, branch)
+	case workspaceBackendJJ:
+		add := exec.Command("jj", "workspace", "add", "--name", name, path)
+		add.Dir = cwd
+		if out, err := add.CombinedOutput(); err != nil {
+			return "", "", fmt.Errorf("jj workspace add %s: %w\n%s",
+				path, err, bytes.TrimSpace(out))
+		}
+		debugLog("jj workspace created at %s name=%s", path, name)
+	default:
+		return "", "", fmt.Errorf("no repo backend at %s", cwd)
 	}
-	// There is a short window between `git worktree add` returning and
-	// lockWorktree completing where a concurrent ask's pruneWorktrees
-	// could remove this directory. Practically negligible (sub-ms) and
-	// the collision-probability of the 12-char random tail already
-	// makes cross-instance targeting unlikely.
 	lockWorktreeAt(cwd, name)
-	debugLog("worktree created at %s on branch %s", path, branch)
 	return path, name, nil
 }
 
-// worktreePath returns the absolute path for a worktree directory name
-// rooted at cwd. The name is trusted; callers hand in names either
-// generated by newWorktreeName or derived from worktreeNameFromCwd.
+// worktreePath returns the absolute path for a worktree directory name rooted
+// at cwd. The name is trusted; callers hand in names either generated by
+// newWorktreeName or derived from worktreeNameFromCwd.
 func worktreePath(cwd, name string) string {
 	return filepath.Join(cwd, ".claude", "worktrees", name)
 }
 
 // newWorktreeName returns a fresh worktree directory name as an
-// `<adjective>-<verb>-<noun>` triple drawn uniformly from the curated
-// lists in worktree_words.go (125,000 combinations). A stat-based
-// collision check retries the triple if the directory happens to
-// exist; after eight draws we fall back to the same triple plus a
-// 6-char alphanumeric tail so the function can't spin forever even
-// in pathological repos.
+// `<adjective>-<verb>-<noun>` triple drawn uniformly from the curated lists in
+// worktree_words.go (125,000 combinations). A stat-based collision check
+// retries the triple if the directory happens to exist; after eight draws we
+// fall back to the same triple plus a 6-char alphanumeric tail so the function
+// can't spin forever even in pathological repos.
 func newWorktreeName(cwd string) string {
 	parent := filepath.Join(cwd, ".claude", "worktrees")
 	for attempt := 0; attempt < 8; attempt++ {
@@ -312,22 +493,19 @@ func newWorktreeName(cwd string) string {
 	return randomWhimsy() + "-" + randomAlphanum(6)
 }
 
-// randomWhimsy picks one adjective, one verb, one noun from the
-// curated lists and joins them with dashes.
+// randomWhimsy picks one adjective, one verb, one noun from the curated lists
+// and joins them with dashes.
 func randomWhimsy() string {
 	return pickWord(worktreeAdjectives) + "-" +
 		pickWord(worktreeVerbs) + "-" +
 		pickWord(worktreeNouns)
 }
 
-// pickWord returns a uniformly-random entry from list using
-// crypto/rand.Int so the distribution has no modulo bias.
+// pickWord returns a uniformly-random entry from list using crypto/rand.Int so
+// the distribution has no modulo bias.
 func pickWord(list []string) string {
 	n, err := rand.Int(rand.Reader, big.NewInt(int64(len(list))))
 	if err != nil {
-		// rand.Reader errors are essentially "the OS is broken". The
-		// generator still needs to return something; picking index 0
-		// keeps the name shape valid while logging the oddity.
 		debugLog("pickWord: rand.Int: %v", err)
 		return list[0]
 	}
@@ -335,8 +513,8 @@ func pickWord(list []string) string {
 }
 
 // randomAlphanum returns n lowercase alphanumeric characters drawn from
-// crypto/rand. 36^12 ≈ 4.7e18 keyspace is wide enough that we don't
-// track used names per-repo.
+// crypto/rand. 36^12 ≈ 4.7e18 keyspace is wide enough that we don't track used
+// names per-repo.
 func randomAlphanum(n int) string {
 	const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
 	raw := make([]byte, n)
@@ -349,10 +527,9 @@ func randomAlphanum(n int) string {
 }
 
 // ensureResumeWorktree recreates a `.claude/worktrees/<name>` directory that
-// was pruned between sessions so `claude --resume` has a cwd to run in. No-op
-// when resumeCwd doesn't point at a worktree, or when the dir already exists.
-// Tries to reattach the original `worktree-<name>` branch; falls back to
-// creating it if pruning also deleted the branch.
+// was pruned between sessions so provider resume has a cwd to run in. JJ
+// workspaces are also refreshed with `jj workspace update-stale` when they
+// still exist on disk.
 func ensureResumeWorktree(resumeCwd string) error {
 	if resumeCwd == "" {
 		return nil
@@ -361,27 +538,67 @@ func ensureResumeWorktree(resumeCwd string) error {
 	if name == "" {
 		return nil
 	}
-	if _, err := os.Stat(resumeCwd); err == nil {
-		return nil
-	}
 	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(resumeCwd)))
-	branch := "worktree-" + name
-	add := exec.Command("git", "worktree", "add", resumeCwd, branch)
-	add.Dir = repoRoot
-	out, err := add.CombinedOutput()
-	if err == nil {
-		debugLog("worktree recreated at %s on branch %s", resumeCwd, branch)
+	switch worktreeBackendAt(repoRoot) {
+	case workspaceBackendGit:
+		if _, err := os.Stat(resumeCwd); err == nil {
+			return nil
+		}
+		branch := "worktree-" + name
+		add := exec.Command("git", "worktree", "add", resumeCwd, branch)
+		add.Dir = repoRoot
+		out, err := add.CombinedOutput()
+		if err == nil {
+			debugLog("worktree recreated at %s on branch %s", resumeCwd, branch)
+			return nil
+		}
+		create := exec.Command("git", "worktree", "add", "-b", branch, resumeCwd)
+		create.Dir = repoRoot
+		out2, err2 := create.CombinedOutput()
+		if err2 == nil {
+			debugLog("worktree recreated at %s on new branch %s", resumeCwd, branch)
+			return nil
+		}
+		return fmt.Errorf("git worktree add %s: %w\n%s\n%s",
+			resumeCwd, err2, bytes.TrimSpace(out), bytes.TrimSpace(out2))
+	case workspaceBackendJJ:
+		if _, err := os.Stat(resumeCwd); err == nil {
+			return jjWorkspaceUpdateStale(resumeCwd)
+		}
+		workspaces, err := jjWorkspaceTargets(repoRoot)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(resumeCwd), 0o755); err != nil {
+			return fmt.Errorf("prepare worktrees dir: %w", err)
+		}
+		if target, ok := workspaces[name]; ok {
+			forget := exec.Command("jj", "--ignore-working-copy", "workspace", "forget", name)
+			forget.Dir = repoRoot
+			if out, err := forget.CombinedOutput(); err != nil {
+				return fmt.Errorf("jj workspace forget %s: %w\n%s", name, err, bytes.TrimSpace(out))
+			}
+			add := exec.Command("jj", "workspace", "add", "--name", name, resumeCwd)
+			add.Dir = repoRoot
+			if out, err := add.CombinedOutput(); err != nil {
+				return fmt.Errorf("jj workspace add %s: %w\n%s", resumeCwd, err, bytes.TrimSpace(out))
+			}
+			edit := exec.Command("jj", "edit", target)
+			edit.Dir = resumeCwd
+			if out, err := edit.CombinedOutput(); err != nil {
+				return fmt.Errorf("jj edit %s in %s: %w\n%s", target, resumeCwd, err, bytes.TrimSpace(out))
+			}
+			return nil
+		}
+		add := exec.Command("jj", "workspace", "add", "--name", name, resumeCwd)
+		add.Dir = repoRoot
+		if out, err := add.CombinedOutput(); err != nil {
+			return fmt.Errorf("jj workspace add %s: %w\n%s", resumeCwd, err, bytes.TrimSpace(out))
+		}
+		return nil
+	default:
 		return nil
 	}
-	create := exec.Command("git", "worktree", "add", "-b", branch, resumeCwd)
-	create.Dir = repoRoot
-	out2, err2 := create.CombinedOutput()
-	if err2 == nil {
-		debugLog("worktree recreated at %s on new branch %s", resumeCwd, branch)
-		return nil
-	}
-	return fmt.Errorf("git worktree add %s: %w\n%s\n%s",
-		resumeCwd, err2, bytes.TrimSpace(out), bytes.TrimSpace(out2))
 }
 
 func gitignoreCoversWorktrees(contents string) bool {

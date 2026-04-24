@@ -185,6 +185,11 @@ func gitAvailable() bool {
 	return err == nil
 }
 
+func jjAvailable() bool {
+	_, err := exec.LookPath("jj")
+	return err == nil
+}
+
 // initGitRepo stands up a throwaway git checkout with an empty initial commit
 // so branches/worktrees can be cut off HEAD. Skips the test when git is not
 // on PATH.
@@ -201,6 +206,20 @@ func initGitRepo(t *testing.T) string {
 	return dir
 }
 
+// initJJRepo stands up a throwaway jj repo rooted at the returned path. The
+// default init is colocated, so the repo also has a .git directory, which lets
+// us verify that .jj detection wins over git worktree behavior.
+func initJJRepo(t *testing.T) string {
+	t.Helper()
+	if !jjAvailable() {
+		t.Skip("jj not available in PATH")
+	}
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "repo")
+	runJJ(t, parent, "git", "init", dir)
+	return dir
+}
+
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
@@ -208,6 +227,17 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v in %s: %v\n%s", args, dir, err, out)
+	}
+	return string(out)
+}
+
+func runJJ(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("jj", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("jj %v in %s: %v\n%s", args, dir, err, out)
 	}
 	return string(out)
 }

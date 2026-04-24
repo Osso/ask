@@ -38,12 +38,12 @@ func (m model) sessionArgs() ProviderSessionArgs {
 // Subsequent calls are no-ops while the process is alive.
 //
 // Worktree lifecycle is owned entirely by ask (no provider opts out):
-// when the user's worktree preference is on and we're inside a git
-// checkout, a `.claude/worktrees/ask-<provider>-<id>` sibling is
-// created before fork and `args.Cwd` points at it. Subsequent calls
+// when the user's worktree preference is on and we're inside a repo
+// root, a `.claude/worktrees/<name>` sibling is created before fork
+// and `args.Cwd` points at it. Git repos use `git worktree`; repos
+// with a top-level `.jj` use `jj workspace` instead. Subsequent calls
 // (after a provider swap or a proc exit) reuse `m.worktreeName`
-// verbatim so the same directory serves every backend in the tab —
-// the provider tag in the name is informational only, not a filter.
+// verbatim so the same directory serves every backend in the tab.
 // Resume paths populate `m.worktreeName` from `m.resumeCwd` if the
 // prior session lived inside a worktree.
 func (m *model) ensureProc() error {
@@ -98,8 +98,9 @@ func prepareProviderSessionAt(args ProviderSessionArgs, worktreeName, rootCwd st
 		worktreeName = worktreeNameFromCwd(args.ResumeCwd)
 	}
 
-	// Fresh session + worktree preference on: create a new worktree.
-	if worktreeName == "" && args.SessionID == "" && args.Worktree && inGitCheckoutAt(rootCwd) {
+	// Fresh session + worktree preference on: create a new worktree/workspace.
+	if worktreeName == "" && args.SessionID == "" && args.Worktree &&
+		worktreeBackendAt(rootCwd) != workspaceBackendNone {
 		path, name, err := createWorktreeAt(rootCwd)
 		if err != nil {
 			return args, worktreeName, err
@@ -110,9 +111,9 @@ func prepareProviderSessionAt(args ProviderSessionArgs, worktreeName, rootCwd st
 
 	// With a worktree name in hand (freshly created, reused on swap,
 	// or resume-derived), point the provider at its directory and
-	// recreate it from its branch if prune wiped it between sessions.
+	// recreate it if prune wiped it between sessions.
 	// This runs even when worktree is currently off so a resumed
-	// session lands in the same branch it was created on.
+	// session lands in the same isolated workspace it was created in.
 	if worktreeName != "" {
 		args.Cwd = worktreePath(rootCwd, worktreeName)
 		if err := ensureResumeWorktree(args.Cwd); err != nil {

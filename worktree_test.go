@@ -94,6 +94,22 @@ func TestEnsureWorktreeGitignore_SkipWhenAlreadyCovered(t *testing.T) {
 	}
 }
 
+func TestEnsureWorktreeGitignore_JujutsuCheckoutNoGit(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.MkdirAll(filepath.Join(dir, ".jj"), 0o755); err != nil {
+		t.Fatalf("mkdir .jj: %v", err)
+	}
+	ensureWorktreeGitignore()
+	data, err := os.ReadFile(filepath.Join(dir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(data), ".claude/worktrees/") {
+		t.Errorf(".gitignore not updated for jj checkout: %q", data)
+	}
+}
+
 func TestInGitCheckout(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
@@ -112,6 +128,17 @@ func TestInGitCheckout(t *testing.T) {
 	}
 	if !inGitCheckout() {
 		t.Error(".git dir should count as a git checkout")
+	}
+}
+
+func TestWorktreeBackendAt_PrefersJujutsu(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".jj"), 0o755); err != nil {
+		t.Fatalf("mkdir .jj: %v", err)
+	}
+	writeFile(t, filepath.Join(dir, ".git"), "gitdir: /nowhere\n")
+	if got := worktreeBackendAt(dir); got != workspaceBackendJJ {
+		t.Fatalf("worktreeBackendAt=%v want jj", got)
 	}
 }
 
@@ -347,6 +374,29 @@ func TestCreateExternalWorktree_MakesSiblingAndBranch(t *testing.T) {
 	}
 }
 
+func TestCreateExternalWorktree_UsesJJWhenDetected(t *testing.T) {
+	dir := initJJRepo(t)
+	t.Chdir(dir)
+	path, name, err := createWorktree()
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("workspace path missing: %v", err)
+	}
+	list := runJJ(t, dir, "--ignore-working-copy", "workspace", "list", "-T", "name ++ \"\\n\"")
+	if !strings.Contains(list, name+"\n") {
+		t.Fatalf("jj workspace list missing %q:\n%s", name, list)
+	}
+	lockData, err := os.ReadFile(jjWorkspaceLockPath(path))
+	if err != nil {
+		t.Fatalf("read jj lock: %v", err)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(lockData)), askLockPrefix) {
+		t.Fatalf("jj lock reason=%q want ask:*", lockData)
+	}
+}
+
 func TestPruneWorktrees_NoOpInsideWorktree(t *testing.T) {
 	if !gitAvailable() {
 		t.Skip("git not installed")
@@ -387,6 +437,41 @@ func TestPruneWorktrees_RemovesOurOwnLocked(t *testing.T) {
 	}
 }
 
+func TestPruneWorktrees_JJRemovesCleanWorkspace(t *testing.T) {
+	dir := initJJRepo(t)
+	t.Chdir(dir)
+	path, name, err := createWorktree()
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	pruneWorktrees()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("workspace still exists after prune: %v", err)
+	}
+	list := runJJ(t, dir, "--ignore-working-copy", "workspace", "list", "-T", "name ++ \"\\n\"")
+	if strings.Contains(list, name+"\n") {
+		t.Fatalf("jj workspace %q should be forgotten:\n%s", name, list)
+	}
+}
+
+func TestPruneWorktrees_JJSkipsDirtyWorkspace(t *testing.T) {
+	dir := initJJRepo(t)
+	t.Chdir(dir)
+	path, name, err := createWorktree()
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	writeFile(t, filepath.Join(path, "dirty.txt"), "x\n")
+	pruneWorktrees()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("dirty jj workspace must survive prune: %v", err)
+	}
+	list := runJJ(t, dir, "--ignore-working-copy", "workspace", "list", "-T", "name ++ \"\\n\"")
+	if !strings.Contains(list, name+"\n") {
+		t.Fatalf("dirty jj workspace %q should remain tracked:\n%s", name, list)
+	}
+}
+
 func TestPruneWorktrees_SkipsForeignLocks(t *testing.T) {
 	if !gitAvailable() {
 		t.Skip("git not installed")
@@ -413,6 +498,26 @@ func TestPruneWorktrees_SkipsForeignLocks(t *testing.T) {
 	runGit(t, dir, "worktree", "unlock", path)
 	runGit(t, dir, "worktree", "remove", "--force", path)
 	runGit(t, dir, "branch", "-D", "worktree-"+name)
+}
+
+func TestPruneWorktrees_JJSkipsForeignLocks(t *testing.T) {
+	dir := initJJRepo(t)
+	t.Chdir(dir)
+	path, name, err := createWorktree()
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	if err := os.WriteFile(jjWorkspaceLockPath(path), []byte("foreign-user-has-this\n"), 0o644); err != nil {
+		t.Fatalf("write jj lock: %v", err)
+	}
+	pruneWorktrees()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("foreign-locked jj workspace must survive: %v", err)
+	}
+	list := runJJ(t, dir, "--ignore-working-copy", "workspace", "list", "-T", "name ++ \"\\n\"")
+	if !strings.Contains(list, name+"\n") {
+		t.Fatalf("foreign-locked jj workspace %q should remain tracked:\n%s", name, list)
+	}
 }
 
 func TestWorktreeLocks_ParsesPorcelain(t *testing.T) {
@@ -477,4 +582,28 @@ func TestEnsureResumeWorktree_RecreatesMissingDir(t *testing.T) {
 	// Cleanup.
 	runGit(t, dir, "worktree", "remove", "--force", path)
 	runGit(t, dir, "branch", "-D", "worktree-"+name)
+}
+
+func TestEnsureResumeWorktree_JJRecreatesMissingDir(t *testing.T) {
+	dir := initJJRepo(t)
+	t.Chdir(dir)
+	path, _, err := createWorktree()
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	writeFile(t, filepath.Join(path, "resume.txt"), "hello\n")
+	runJJ(t, path, "status", "--color=never")
+	if err := os.RemoveAll(path); err != nil {
+		t.Fatalf("remove workspace dir: %v", err)
+	}
+	if err := ensureResumeWorktree(path); err != nil {
+		t.Fatalf("ensureResumeWorktree: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(path, "resume.txt"))
+	if err != nil {
+		t.Fatalf("resume file missing after recreate: %v", err)
+	}
+	if string(data) != "hello\n" {
+		t.Fatalf("resume file=%q want hello", data)
+	}
 }

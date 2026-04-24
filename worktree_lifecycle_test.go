@@ -52,6 +52,32 @@ func TestEnsureProc_CreatesWorktreeFirstCall(t *testing.T) {
 	}
 }
 
+func TestEnsureProc_CreatesJJWorkspaceFirstCall(t *testing.T) {
+	dir := initJJRepo(t)
+	t.Chdir(dir)
+	isolateHome(t)
+	p := newFakeProvider()
+	p.id = "codex"
+	withRegisteredProviders(t, p)
+	m := newTestModel(t, p)
+	m.worktree = true
+
+	if err := m.ensureProc(); err != nil {
+		t.Fatalf("ensureProc: %v", err)
+	}
+	if m.worktreeName == "" {
+		t.Fatal("ensureProc did not assign a jj workspace name")
+	}
+	wantCwd := filepath.Join(dir, ".claude", "worktrees", m.worktreeName)
+	if p.startArgs[0].Cwd != wantCwd {
+		t.Errorf("StartSession Cwd=%q want %q", p.startArgs[0].Cwd, wantCwd)
+	}
+	list := runJJ(t, dir, "--ignore-working-copy", "workspace", "list", "-T", "name ++ \"\\n\"")
+	if !strings.Contains(list, m.worktreeName+"\n") {
+		t.Fatalf("jj workspace list missing %q:\n%s", m.worktreeName, list)
+	}
+}
+
 // TestEnsureProc_ReusesExistingWorktreeName simulates a provider swap:
 // m.worktreeName is already set (from a prior session), m.proc was
 // killed. ensureProc should NOT create a new worktree — it should hand
