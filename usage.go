@@ -106,8 +106,9 @@ func usageCachePath() string {
 	return filepath.Join(home, ".claude", ".usage-cache.json")
 }
 
-// formatTTL renders time remaining as two units, compact.
-// Past/zero → "0s"; sub-minute → "Ns"; sub-hour → "NmNs"; sub-day →
+// formatTTL renders time remaining, compact.
+// Past/zero → "0s"; sub-minute → "Ns"; sub-hour → "Nm" (seconds dropped
+// so the chip stops ticking every second near the reset); sub-day →
 // "NhNm"; day+ → "NdNh".
 func formatTTL(expires, now time.Time) string {
 	if expires.IsZero() {
@@ -128,7 +129,7 @@ func formatTTL(expires, now time.Time) string {
 	case hours > 0:
 		return fmt.Sprintf("%dh%dm", hours, mins)
 	case mins > 0:
-		return fmt.Sprintf("%dm%ds", mins, secs)
+		return fmt.Sprintf("%dm", mins)
 	default:
 		return fmt.Sprintf("%ds", secs)
 	}
