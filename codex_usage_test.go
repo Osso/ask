@@ -84,7 +84,7 @@ func TestCodexEventToMsgs_TokenUsageUpdatedEmitsCodexContext(t *testing.T) {
 			"threadId": "t1",
 			"turnId": "r1",
 			"tokenUsage": {
-				"last":  {"inputTokens": 100, "outputTokens": 50, "cachedInputTokens": 0, "reasoningOutputTokens": 0, "totalTokens": 150},
+				"last":  {"inputTokens": 100, "outputTokens": 50, "cachedInputTokens": 250, "reasoningOutputTokens": 0, "totalTokens": 150},
 				"total": {"inputTokens": 30000, "outputTokens": 5000, "cachedInputTokens": 0, "reasoningOutputTokens": 0, "totalTokens": 35000},
 				"modelContextWindow": 400000
 			}
@@ -98,8 +98,8 @@ func TestCodexEventToMsgs_TokenUsageUpdatedEmitsCodexContext(t *testing.T) {
 	if !ok {
 		t.Fatalf("want codexContextMsg, got %T", msgs[0])
 	}
-	if c.tokens != 35000 {
-		t.Errorf("tokens=%d want 35000 (total.totalTokens)", c.tokens)
+	if c.tokens != 350 {
+		t.Errorf("tokens=%d want 350 (last.inputTokens + last.cachedInputTokens)", c.tokens)
 	}
 	if c.window != 400000 {
 		t.Errorf("window=%d want 400000", c.window)
@@ -113,7 +113,7 @@ func TestCodexEventToMsgs_TokenUsageMissingWindowIsZero(t *testing.T) {
 		"params": {
 			"threadId":"t","turnId":"r",
 			"tokenUsage": {
-				"last":  {"inputTokens":0,"outputTokens":0,"cachedInputTokens":0,"reasoningOutputTokens":0,"totalTokens":0},
+				"last":  {"inputTokens":120,"outputTokens":0,"cachedInputTokens":80,"reasoningOutputTokens":0,"totalTokens":200},
 				"total": {"inputTokens":0,"outputTokens":0,"cachedInputTokens":0,"reasoningOutputTokens":0,"totalTokens":200}
 			}
 		}
@@ -124,7 +124,29 @@ func TestCodexEventToMsgs_TokenUsageMissingWindowIsZero(t *testing.T) {
 		t.Errorf("missing modelContextWindow should be 0, got %d", c.window)
 	}
 	if c.tokens != 200 {
-		t.Errorf("tokens=%d want 200", c.tokens)
+		t.Errorf("tokens=%d want 200 (including cached input)", c.tokens)
+	}
+}
+
+func TestCodexEventToMsgs_TokenUsageMissingLastFallsBackToZero(t *testing.T) {
+	proc := &providerProc{}
+	ev := parseCodexEvent(t, `{
+		"method": "thread/tokenUsage/updated",
+		"params": {
+			"threadId":"t","turnId":"r",
+			"tokenUsage": {
+				"total": {"inputTokens":30000,"outputTokens":5000,"cachedInputTokens":1000,"reasoningOutputTokens":0,"totalTokens":35000},
+				"modelContextWindow": 400000
+			}
+		}
+	}`)
+	msgs := codexEventToMsgs(ev, proc)
+	if len(msgs) != 1 {
+		t.Fatalf("want 1 msg, got %d", len(msgs))
+	}
+	c := msgs[0].(codexContextMsg)
+	if c.tokens != 0 {
+		t.Errorf("tokens=%d want 0 when last usage is absent", c.tokens)
 	}
 }
 

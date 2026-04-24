@@ -164,6 +164,18 @@ func contextPercent(used, limit int) int {
 	return p
 }
 
+// codexContextTokens derives the prompt footprint of the current Codex turn
+// from thread/tokenUsage/updated. Like the Claude path, ctx should reflect
+// tokens occupying the model's input window, so we count current-turn input
+// plus cached input and deliberately ignore cumulative totals and output.
+func codexContextTokens(tokenUsage map[string]any) int {
+	last, _ := tokenUsage["last"].(map[string]any)
+	if last == nil {
+		return 0
+	}
+	return jsonInt(last["inputTokens"]) + jsonInt(last["cachedInputTokens"])
+}
+
 // assistantUsage pulls the current turn's context size out of an
 // assistant event's message.usage block. The returned int is
 // input_tokens + cache_read_input_tokens + cache_creation_input_tokens —

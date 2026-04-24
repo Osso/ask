@@ -557,8 +557,7 @@ func codexEventToMsgs(ev map[string]any, proc *providerProc) []tea.Msg {
 		if tu == nil {
 			return nil
 		}
-		total, _ := tu["total"].(map[string]any)
-		tokens := jsonInt(total["totalTokens"])
+		tokens := codexContextTokens(tu)
 		window := jsonInt(tu["modelContextWindow"])
 		return []tea.Msg{codexContextMsg{tokens: tokens, window: window, proc: proc}}
 	case "error":
