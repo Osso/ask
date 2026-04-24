@@ -1,12 +1,27 @@
 # ask
 
-A terminal chat UI for Claude Code. `ask` spawns the `claude` CLI as a
-subprocess and wraps it in a Bubble Tea TUI with inline markdown,
-image attachments, a scrollable history, session resume, and a
-custom MCP server that replaces the built-in `AskUserQuestion` tool
-with a far richer tabbed modal.
+<p align="center">
+  <a href="https://github.com/Cidan/ask/releases"><img src="https://img.shields.io/github/v/release/Cidan/ask?color=ff75b7&label=release" alt="Latest Release"></a>
+  <a href="./LICENSE"><img src="https://img.shields.io/github/license/Cidan/ask?color=a78bfa" alt="MIT License"></a>
+  <a href="https://golang.org"><img src="https://img.shields.io/github/go-mod/go-version/Cidan/ask?logo=go&logoColor=white&color=00add8" alt="Go version"></a>
+  <a href="https://github.com/charmbracelet/bubbletea"><img src="https://img.shields.io/badge/bubble%20tea-v2-ff75b7?logo=go&logoColor=white" alt="Bubble Tea v2"></a>
+  <a href="https://github.com/anthropics/claude-code"><img src="https://img.shields.io/badge/claude%20code-wrapped-d97757" alt="Claude Code wrapped"></a>
+</p>
 
-![Made with VHS](https://vhs.charm.sh/vhs-4bXH7YlhqAMXxv6lqsjjTs.gif)
+<p align="center">
+  A Bubble Tea v2 TUI for <a href="https://github.com/anthropics/claude-code">Claude Code</a>.<br />
+  Streaming markdown, inline images, tabs, themes, colored diffs,<br />
+  a draggable scrollbar, and a richer MCP-driven question modal.
+</p>
+
+<p align="center"><img width="800" alt="ask demo" src="https://vhs.charm.sh/vhs-4bXH7YlhqAMXxv6lqsjjTs.gif" /></p>
+
+`ask` spawns the `claude` CLI in
+`-p --input-format stream-json --output-format stream-json` mode,
+pipes events through a Bubble Tea TUI, and swaps Claude's built-in
+`AskUserQuestion` tool for a tabbed modal backed by an embedded MCP
+server. Sessions resume, tabs isolate, shell mode drops you straight
+into `$SHELL`, and fifteen themes re-paint the whole UI live.
 
 ## Features
 
@@ -160,6 +175,16 @@ Optional dependencies:
 - `wl-clipboard` — for image paste on Wayland (`pacman -S wl-clipboard`, etc.)
 - A terminal speaking the Kitty graphics protocol — for inline thumbnails (Kitty, Ghostty). Without one, images still send to Claude; only the local preview falls back to a text chip.
 
+> [!TIP]
+> Pair `ask` with Kitty or Ghostty to get inline image thumbnails via the
+> Kitty graphics protocol. Everywhere else you'll see a text chip, but the
+> image is still sent to Claude — nothing is dropped.
+
+> [!WARNING]
+> Clipboard paste is **Wayland only** by design. X11 and macOS fallbacks
+> haven't been added. If you need them, open an issue before wiring one up —
+> they're out of scope right now.
+
 ## Usage
 
 Launch in any directory:
@@ -291,6 +316,10 @@ render as raw text in history. Drop to a separate shell for those.
 toggles the highlighted entry and writes the file immediately, `Esc`
 closes the modal.
 
+> [!NOTE]
+> Every toggle writes to disk the moment you press `Enter` — there's no save
+> step. Hand-editing `~/.config/ask/ask.json` while ask is closed is fine too.
+
 | Toggle               | Default | What it does                                                                                 |
 |----------------------|---------|----------------------------------------------------------------------------------------------|
 | Quiet Mode           | on      | When on, assistant text chunks stream silently and the combined turn is rendered once at the end; when off, each chunk is appended as it arrives. |
@@ -318,7 +347,8 @@ two Streamable-HTTP MCP tools, `ask_user_question` and
 - `--settings` installing a `PreToolUse` hook that blocks the built-in `AskUserQuestion` tool and redirects the model to `mcp__ask__ask_user_question`
 - `--permission-prompt-tool mcp__ask__approval_prompt` so every permission-gated tool call routes through the ask TUI's approval modal
 
-### `ask_user_question` schema
+<details>
+<summary><strong><code>ask_user_question</code> schema</strong></summary>
 
 ```jsonc
 {
@@ -346,7 +376,10 @@ Response:
 }
 ```
 
-### Diagram format (strict)
+</details>
+
+<details>
+<summary><strong>Diagram format (strict)</strong></summary>
 
 The tool description pins the rules the model must follow for
 `pick_diagram` previews:
@@ -357,6 +390,8 @@ The tool description pins the rules the model must follow for
 - ≤ 40 columns × ≤ 12 rows (all diagrams in one question are padded
   to the same bounding box before rendering)
 
+</details>
+
 ## Debugging
 
 Set `ASK_DEBUG=1` to write a trace to `/tmp/ask.log` (paste/send/claude
@@ -365,4 +400,15 @@ stuck — pair it with the in-history stderr surfaced on Claude exit.
 
 ## License
 
-See LICENSE.
+[MIT](./LICENSE)
+
+---
+
+<p align="center">
+  Built on <a href="https://github.com/charmbracelet/bubbletea">Bubble Tea</a>,
+  <a href="https://github.com/charmbracelet/bubbles">Bubbles</a>,
+  <a href="https://github.com/charmbracelet/lipgloss">Lip Gloss</a>,
+  <a href="https://github.com/charmbracelet/glamour">Glamour</a>, and
+  <a href="https://github.com/charmbracelet/ultraviolet">Ultraviolet</a>.<br />
+  Inspired by <a href="https://github.com/charmbracelet/crush">crush</a>. Wraps <a href="https://github.com/anthropics/claude-code">Claude Code</a>.
+</p>
