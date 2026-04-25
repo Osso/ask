@@ -390,7 +390,7 @@ func ayuTheme() theme {
 		errorFG:     lipgloss.Color("#F28779"),
 		warn:        lipgloss.Color("#FFD173"),
 		dim:         lipgloss.Color("#686868"),
-		muted:       lipgloss.Color("#C7C7C7"),
+		muted:       lipgloss.Color("#B5B5B5"),
 		inverseFG:   lipgloss.Color("#CCCAC2"),
 		darkFG:      lipgloss.Color("#1F2430"),
 		rowHL:       lipgloss.Color("#242B38"),
@@ -399,7 +399,7 @@ func ayuTheme() theme {
 		scrollTrack: lipgloss.Color("#1F2430"),
 		tabActive:   lipgloss.Color("#E6B450"),
 		background:  lipgloss.Color("#1F2430"),
-		foreground:  lipgloss.Color("#CCCAC2"),
+		foreground:  lipgloss.Color("#E6E1CF"),
 	}
 }
 
