@@ -16,4 +16,10 @@ func TestAyuTheme_UsesAccentForegroundHighlight(t *testing.T) {
 	if style.Code.StylePrimitive.BackgroundColor != nil {
 		t.Fatalf("ayu inline code background = %s, want no forced background", *style.Code.StylePrimitive.BackgroundColor)
 	}
+	if got := *style.CodeBlock.Chroma.LiteralString.Color; got != "#95E6CB" {
+		t.Fatalf("ayu string foreground = %s, want softer cyan #95E6CB", got)
+	}
+	if style.CodeBlock.Chroma.LiteralString.BackgroundColor != nil {
+		t.Fatalf("ayu string background = %s, want no token background", *style.CodeBlock.Chroma.LiteralString.BackgroundColor)
+	}
 }

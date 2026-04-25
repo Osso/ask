@@ -22,6 +22,7 @@ type theme struct {
 	darkFG      color.Color
 	rowHL       color.Color
 	highlightFG color.Color
+	stringFG    color.Color
 	scrollTrack color.Color
 	tabActive   color.Color
 
@@ -394,6 +395,7 @@ func ayuTheme() theme {
 		darkFG:      lipgloss.Color("#1F2430"),
 		rowHL:       lipgloss.Color("#242B38"),
 		highlightFG: lipgloss.Color("#E6B450"),
+		stringFG:    lipgloss.Color("#95E6CB"),
 		scrollTrack: lipgloss.Color("#1F2430"),
 		tabActive:   lipgloss.Color("#E6B450"),
 		background:  lipgloss.Color("#1F2430"),

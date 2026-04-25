@@ -168,9 +168,12 @@ with Ayu/Codex yellow accents and foreground highlights.
   colors, so terminal OSC 10/11 matches the palette.
 - Row and inline-code highlights use Ayu/Codex yellow (`#E6B450`) as foreground text
   instead of the Mirage blue-grey background role.
+- Code-block string tokens use Ayu cyan/teal (`#95E6CB`) instead of the brighter
+  success yellow-green, while keeping no token-specific background.
 
 **Key files.**
 - `themes.go` (`themeRegistry`, `ayuTheme`)
+- `view.go` (`buildGlamourStyle`)
 
 **Tests to re-run after rebase.**
 - `go test ./...`
