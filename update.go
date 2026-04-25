@@ -1334,6 +1334,10 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 		if m.provider.ID() == "codex" {
 			return m.handleCodexRunPlan(line)
 		}
+	case "/compact":
+		if m.provider.ID() == "codex" {
+			return m.handleCodexCompact()
+		}
 	}
 	bare := strings.TrimPrefix(cmd, "/")
 	for _, e := range m.providerSlashCmds {
@@ -1365,6 +1369,20 @@ func (m model) handleCodexRunPlan(line string) (tea.Model, tea.Cmd) {
 		m.killProc()
 	}
 	return m.sendToProvider(prompt)
+}
+
+func (m model) handleCodexCompact() (tea.Model, tea.Cmd) {
+	if err := codexStartCompaction(m.proc); err != nil {
+		m.appendHistory(outputStyle.Render(errStyle.Render("No Codex session to compact.")))
+		return m, nil
+	}
+	wasIdle := !m.busy
+	m.busy = true
+	m.status = "compacting…"
+	if wasIdle {
+		return m, m.spinner.Tick
+	}
+	return m, nil
 }
 
 func persistSlashCmdsCmd(p Provider, cmds []providerSlashEntry) tea.Cmd {

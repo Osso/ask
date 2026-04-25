@@ -752,6 +752,52 @@ func TestHandleCommand_CodexRunPlanReportsNoPendingTask(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_CodexCompactStartsThreadCompaction(t *testing.T) {
+	fp := newFakeProvider()
+	fp.id = "codex"
+	m := newTestModel(t, fp)
+	stdin := &bytes.Buffer{}
+	m.proc = &providerProc{payload: &codexState{
+		stdin:    stdin,
+		threadID: "thr_123",
+		nextID:   41,
+	}}
+
+	m2, cmd := m.handleCommand("/compact")
+	mm := m2.(model)
+	if cmd == nil {
+		t.Fatal("/compact should schedule spinner tick while compaction is running")
+	}
+	if !mm.busy || mm.status != "compacting…" {
+		t.Fatalf("busy/status=(%v,%q), want compacting state", mm.busy, mm.status)
+	}
+	got := stdin.String()
+	if !strings.Contains(got, `"method":"thread/compact/start"`) {
+		t.Fatalf("compact request missing method: %s", got)
+	}
+	if !strings.Contains(got, `"threadId":"thr_123"`) {
+		t.Fatalf("compact request missing thread id: %s", got)
+	}
+}
+
+func TestHandleCommand_CodexCompactRequiresActiveThread(t *testing.T) {
+	fp := newFakeProvider()
+	fp.id = "codex"
+	m := newTestModel(t, fp)
+
+	m2, cmd := m.handleCommand("/compact")
+	mm := m2.(model)
+	if cmd != nil {
+		t.Fatal("/compact without a thread should not schedule work")
+	}
+	if mm.busy {
+		t.Fatal("/compact without a thread should not mark busy")
+	}
+	if len(mm.history) == 0 || !strings.Contains(mm.history[len(mm.history)-1].text, "No Codex session to compact.") {
+		t.Fatalf("missing no-session history message: %+v", mm.history)
+	}
+}
+
 func TestCancelTurn_DoesNothingWhenIdle(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	out, _ := m.cancelTurn()

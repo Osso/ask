@@ -111,6 +111,7 @@ func (codexProvider) BaseSlashCommands() []slashCmd {
 		{"/clear", "start a new Codex session"},
 		{"/model", "select the Codex model"},
 		{"/effort", "select the Codex reasoning effort"},
+		{"/compact", "summarize conversation to prevent hitting the context limit"},
 		{"/run-plan", "set PLAN_FILE and work on next plan item (optional: /run-plan <file>)"},
 	}
 }
@@ -362,6 +363,27 @@ func (codexProvider) Interrupt(p *providerProc) (bool, error) {
 	return true, codexWriteJSONLocked(state, codexRequest(id, "turn/interrupt", map[string]any{
 		"threadId": tid,
 		"turnId":   turnID,
+	}))
+}
+
+func codexStartCompaction(p *providerProc) error {
+	if p == nil {
+		return fmt.Errorf("codex: session not initialized")
+	}
+	state, _ := p.payload.(*codexState)
+	if state == nil {
+		return fmt.Errorf("codex: session not initialized")
+	}
+	state.mu.Lock()
+	id := state.nextID
+	state.nextID++
+	tid := state.threadID
+	state.mu.Unlock()
+	if tid == "" {
+		return fmt.Errorf("codex: session not initialized")
+	}
+	return codexWriteJSONLocked(state, codexRequest(id, "thread/compact/start", map[string]any{
+		"threadId": tid,
 	}))
 }
 

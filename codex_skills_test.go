@@ -141,15 +141,25 @@ func TestCodexParseSkillsList_EnabledDefaultsToTrueWhenOmitted(t *testing.T) {
 
 func TestCodexBaseSlashCommandsIncludesRunPlan(t *testing.T) {
 	cmds := codexProvider{}.BaseSlashCommands()
+	requireCodexBaseSlashCommand(t, cmds, "/run-plan")
+}
+
+func TestCodexBaseSlashCommandsIncludesCompact(t *testing.T) {
+	cmds := codexProvider{}.BaseSlashCommands()
+	requireCodexBaseSlashCommand(t, cmds, "/compact")
+}
+
+func requireCodexBaseSlashCommand(t *testing.T, cmds []slashCmd, want string) {
+	t.Helper()
 	for _, cmd := range cmds {
-		if cmd.name == "/run-plan" {
+		if cmd.name == want {
 			if cmd.desc == "" {
-				t.Fatal("/run-plan should have a picker description")
+				t.Fatalf("%s should have a picker description", want)
 			}
 			return
 		}
 	}
-	t.Fatalf("Codex base slash commands missing /run-plan: %+v", cmds)
+	t.Fatalf("Codex base slash commands missing %s: %+v", want, cmds)
 }
 
 func TestCodexFindNextPlanItem(t *testing.T) {

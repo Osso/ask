@@ -225,11 +225,11 @@ change.
 
 ---
 
-## 8. Codex `/run-plan` command mirror
+## 8. Codex built-in command mirrors
 
-**Purpose.** Show and handle the Codex fork's `/run-plan` command inside ask.
-Codex app-server exposes `skills/list`, but it does not expose built-in TUI
-slash commands, so ask mirrors this command locally.
+**Purpose.** Show and handle selected Codex built-in TUI commands inside ask.
+Codex app-server exposes `skills/list`, but it does not expose a built-in slash
+command list, so ask mirrors the commands it needs locally.
 
 **Behavior details worth preserving.**
 - `/run-plan` appears in Codex's base slash-command list.
@@ -240,22 +240,27 @@ slash commands, so ask mirrors this command locally.
   plan, matching the Codex fork's hook contract.
 - When no pending item exists, ask reports `No pending tasks in <file>.` and
   does not start a provider turn.
+- `/compact` appears in Codex's base slash-command list.
+- `/compact` requires an active Codex app-server thread and sends
+  `thread/compact/start` with the current `threadId`.
+- When no Codex thread exists, ask reports `No Codex session to compact.` and
+  does not start a provider turn.
 
 **Key files.**
 - `codex.go` (`BaseSlashCommands`, `codexRunPlanPrompt`,
-  `codexFindNextPlanItem`)
-- `update.go` (`handleCommand`, `handleCodexRunPlan`)
+  `codexFindNextPlanItem`, `codexStartCompaction`)
+- `update.go` (`handleCommand`, `handleCodexRunPlan`, `handleCodexCompact`)
 - `codex_skills_test.go`
 - `update_test.go`
 
 **Tests to re-run after rebase.**
 - `go test ./...`
 - Focused:
-  `go test ./... -run 'CodexFindNextPlanItem|CodexRunPlanPrompt|HandleCommand_CodexRunPlan'`
+  `go test ./... -run 'CodexBaseSlashCommandsIncludes|CodexFindNextPlanItem|CodexRunPlanPrompt|HandleCommand_CodexRunPlan|HandleCommand_CodexCompact'`
 
 **Rebase risk.** Medium. If upstream Codex changes `/run-plan` wording,
-`PLAN_FILE` semantics, or app-server grows a built-in command API, update or
-remove ask's mirror instead of letting behavior drift.
+`PLAN_FILE` semantics, `/compact` dispatch, or app-server grows a built-in
+command API, update or remove ask's mirrors instead of letting behavior drift.
 
 ---
 
