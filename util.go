@@ -18,6 +18,13 @@ func isCtrlKey(msg tea.KeyPressMsg, key rune) bool {
 		msg.Keystroke() == want
 }
 
+func isCtrlSpecial(msg tea.KeyPressMsg, code rune, name string) bool {
+	want := "ctrl+" + name
+	return (msg.Mod&tea.ModCtrl != 0 && msg.Code == code) ||
+		msg.String() == want ||
+		msg.Keystroke() == want
+}
+
 func short(id string) string {
 	if len(id) >= 8 {
 		return id[:8]

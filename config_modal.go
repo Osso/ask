@@ -440,7 +440,7 @@ func (m model) viewThemePicker() string {
 // openConfigProviderPicker starts the /config → Default Provider
 // sub-picker. Unlike the quick Ctrl+B switcher, this one only writes
 // cfg.Provider — it doesn't touch the current tab. Existing tabs keep
-// their provider; the next tab (Ctrl+T) inherits the new default.
+// their provider; the next tab (Ctrl+N) inherits the new default.
 func (m model) openConfigProviderPicker() model {
 	m.configProviderPickerActive = true
 	// Seed the cursor from the on-disk default, not the current tab's

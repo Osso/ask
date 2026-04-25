@@ -187,7 +187,7 @@ func TestConfigProviderPicker_EnterReturnsToInputMode(t *testing.T) {
 }
 
 // TestOpenTab_LoadsCfgFromDisk covers the other half of the reported
-// bug: after a /config change, Ctrl+T must spawn the new tab on the
+// bug: after a /config change, Ctrl+N must spawn the new tab on the
 // just-saved provider rather than whatever was on disk at ask startup.
 func TestOpenTab_LoadsCfgFromDisk(t *testing.T) {
 	isolateHome(t)

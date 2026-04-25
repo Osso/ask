@@ -1,11 +1,24 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+// preserveCwd snapshots the test process cwd and restores it on cleanup.
+// app.openTab / app.closeTab mutate os.Chdir, so any test that exercises
+// those paths must isolate later tests from cwd drift.
+func preserveCwd(t *testing.T) {
+	t.Helper()
+	orig, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+}
 
 func testAppWithTwoTabs(t *testing.T) app {
 	t.Helper()
@@ -37,6 +50,56 @@ func TestApp_SessionsLoadedStaysOnOwningTab(t *testing.T) {
 		t.Errorf("tab 2 mode=%v want modeInput", a2.tabs[1].mode)
 	}
 }
+
+func TestApp_CtrlNOpensNewTab(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  tea.KeyPressMsg
+	}{
+		{"mod-ctrl-n", tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'n'}},
+		{"raw-ctrl-code", tea.KeyPressMsg{Code: 0x0E}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			preserveCwd(t)
+			first := newTestModel(t, newFakeProvider())
+			a := app{
+				tabs:   []*model{&first},
+				active: 0,
+				nextID: 2,
+				width:  first.width,
+				height: first.height,
+			}
+
+			newM, _ := a.Update(tc.msg)
+			a2 := newM.(app)
+			if len(a2.tabs) != 2 {
+				t.Fatalf("ctrl+n should open a new tab, got %d tabs", len(a2.tabs))
+			}
+			if a2.active != 1 {
+				t.Errorf("ctrl+n should focus the new tab, active=%d want 1", a2.active)
+			}
+		})
+	}
+}
+
+func TestApp_CtrlTDoesNotOpenNewTab(t *testing.T) {
+	first := newTestModel(t, newFakeProvider())
+	a := app{
+		tabs:   []*model{&first},
+		active: 0,
+		nextID: 2,
+		width:  first.width,
+		height: first.height,
+	}
+
+	newM, _ := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 't'})
+	a2 := newM.(app)
+	if len(a2.tabs) != 1 {
+		t.Fatalf("ctrl+t must no longer open a tab; got %d tabs", len(a2.tabs))
+	}
+}
+
 
 func TestApp_HistoryLoadedStaysOnOwningTab(t *testing.T) {
 	a := testAppWithTwoTabs(t)

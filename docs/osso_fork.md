@@ -23,6 +23,7 @@ b187d8c mcp: enforce 1 MiB argument size limit on tool handlers
 1dbebdb worktree: fix TOCTOU in ensureWorktreeGitignore via Lstat+atomic rename
 60751bd shell: strip Anthropic credentials from shell subprocess env
 e57465c mcp: disable localhost bypass for DNS-rebinding protection
+tabs: rebind new-tab shortcut to Ctrl+N
 ```
 
 ---
@@ -357,6 +358,32 @@ Codex app-server.
 **Rebase risk.** Medium. Provider switching and Codex app-server protocol code
 are both active areas. Re-check generated Codex schemas after app-server
 updates; `ThreadStartParams` and resume params must still accept `model`.
+
+---
+
+## 12. Ctrl+N opens a new tab
+
+**Purpose.** Match the common terminal/browser shortcut for "new tab" and avoid
+clashing with the Ctrl+T transpose-character binding shells/readline use.
+
+**Behavior details worth preserving.**
+- The app wrapper opens a new tab on `ModCtrl + 'n'`, not `ModCtrl + 't'`.
+- README, `/config` provider-picker comment, and `tabs.go` docstring all refer
+  to `Ctrl+N` as the new-tab shortcut.
+
+**Key files.**
+- `tabs.go` (`app.Update`)
+- `config_modal.go` (`openConfigProviderPicker` comment)
+- `config_provider_test.go` (`TestOpenTab_LoadsCfgFromDisk` comment)
+- `tabs_test.go` (`TestApp_CtrlNOpensNewTab`, `TestApp_CtrlTDoesNotOpenNewTab`)
+- `README.md`
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'TestApp_CtrlN|TestApp_CtrlTDoesNotOpenNewTab'`
+- `go test ./...`
+
+**Rebase risk.** Low. Watch for upstream key dispatcher changes that re-add
+`Ctrl+T` handling, and update README/comments together with the binding.
 
 ---
 

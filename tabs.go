@@ -39,7 +39,7 @@ type app struct {
 // newApp wraps the first tab in the app struct. Config is deliberately
 // not cached here — openTab reloads from disk so /config toggles made
 // between tabs (including the default provider) take effect on the
-// very next Ctrl+T.
+// very next Ctrl+N.
 func newApp(first *model) app {
 	return app{
 		tabs:   []*model{first},
@@ -111,13 +111,13 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mod == tea.ModCtrl && m.Code == 'z' {
 			return a.suspendApp()
 		}
-		if m.Mod == tea.ModCtrl && m.Code == 't' {
+		if isCtrlKey(m, 'n') {
 			return a.openTab()
 		}
-		if m.Mod == tea.ModCtrl && m.Code == tea.KeyLeft {
+		if isCtrlSpecial(m, tea.KeyLeft, "left") {
 			return a.switchTab(a.active - 1)
 		}
-		if m.Mod == tea.ModCtrl && m.Code == tea.KeyRight {
+		if isCtrlSpecial(m, tea.KeyRight, "right") {
 			return a.switchTab(a.active + 1)
 		}
 		return a.dispatchActive(msg)

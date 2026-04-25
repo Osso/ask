@@ -26,7 +26,7 @@ into `$SHELL`, and fifteen themes re-paint the whole UI live.
 ## Features
 
 - **Chat with Claude Code** via streaming JSON input/output
-- **[Tabs](#tabs)** — `Ctrl+T` opens a new tab with its own claude subprocess, shell, MCP bridge, history, session, and cwd; `Ctrl+←` / `Ctrl+→` cycle between tabs; a byobu-style strip at the bottom shows each tab's shortened cwd (prefixed with `▸` when that tab is busy); closing the last tab quits
+- **[Tabs](#tabs)** — `Ctrl+N` opens a new tab with its own claude subprocess, shell, MCP bridge, history, session, and cwd; `Ctrl+←` / `Ctrl+→` cycle between tabs; a byobu-style strip at the bottom shows each tab's shortened cwd (prefixed with `▸` when that tab is busy); closing the last tab quits
 - **Resume sessions** — `/resume` opens a picker of prior conversations in the current directory
 - **Pick the Claude model** — `/model` opens a picker (default / haiku / sonnet / opus / custom) and persists the choice
 - **Configurable UI** — `/config` toggles quiet mode, cursor blink, inline diff rendering, and skip-all-permissions; persisted to `~/.config/ask/ask.json`
@@ -69,7 +69,7 @@ work for `ls`. `cd` also kills the live claude subprocess and clears the
 turn history, because claude sessions are bound to a cwd — the next
 send spawns a fresh session rooted at the new directory.
 
-`Ctrl+T` opens a new tab. Each tab is a fully independent sandbox: its
+`Ctrl+N` opens a new tab. Each tab is a fully independent sandbox: its
 own claude subprocess, shell subprocess, MCP bridge on its own localhost
 port, session id, viewport scroll, pending attachments, and cwd. Nothing
 about one tab leaks into another — pasting an image, running a shell
@@ -221,7 +221,7 @@ prefix, same as anywhere else a path is expected.
 
 ### Tabs
 
-`Ctrl+T` opens a new tab. Each tab is its own sandbox: a separate
+`Ctrl+N` opens a new tab. Each tab is its own sandbox: a separate
 `claude` subprocess, shell subprocess, MCP bridge (with its own
 localhost port), history, session id, viewport scroll position,
 pending attachments, and working directory. Nothing about one tab
@@ -288,7 +288,7 @@ render as raw text in history. Drop to a separate shell for those.
 | `Ctrl+C` / `Esc`       | While a turn is running, open a `Stop this turn?` confirm box; on confirm it kills the claude subprocess and a new one spawns on the next send. `Esc` also clears pending attachments when idle. |
 | `Ctrl+C` (twice, idle) | Close the current tab. First press shows a `Press ctrl+c again to exit` hint; a second `Ctrl+C` closes the tab (or quits if it was the last). Any other key disarms the hint. |
 | `Ctrl+D`               | Close the current tab immediately; quits if it's the last one |
-| `Ctrl+T`               | Open a new tab (inherits the active tab's cwd)     |
+| `Ctrl+N`               | Open a new tab (inherits the active tab's cwd)     |
 | `Ctrl+←` / `Ctrl+→`    | Cycle to the previous / next tab (wraps)           |
 | `PgUp` / `PgDn`        | Scroll the viewport half a page                    |
 | Mouse wheel            | Scroll the viewport                                |
