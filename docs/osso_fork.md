@@ -6,20 +6,22 @@ upstream: each section lists what the patch does, where it lives, how to
 exercise it, and what to re-verify after the rebase lands.
 
 Baseline: diff range `upstream/main..HEAD`. Regenerate the commit list with
-`git log --oneline upstream/main..HEAD` when refreshing this doc.
+`git log --oneline upstream/main..HEAD`, then omit documentation-only commits
+when refreshing this doc.
 
 Current patch stack:
 
 ```text
-448a504 mcp: disable localhost bypass for DNS-rebinding protection
-cff2248 shell: strip Anthropic credentials from shell subprocess env
-4409dfd worktree: fix TOCTOU in ensureWorktreeGitignore via Lstat+atomic rename
-27052f6 debug: use per-user XDG_STATE_HOME log path with O_NOFOLLOW
-4e1ebf9 mcp: enforce 1 MiB argument size limit on tool handlers
-e7c7d6b deploy: local build+test+install script
-17c58c7 claude: route permission prompts to claude-bash-hook-approval MCP
-9b6897f themes: add ayu (mirage) palette
-b05db4a Render tool outputs in stream and session replay
+e442815 Add provider switch command
+2a331ed Render tool outputs in stream and session replay
+4b387ef themes: add ayu (mirage) palette
+412d253 claude: route permission prompts to claude-bash-hook-approval MCP
+98d577a deploy: local build+test+install script
+962312b mcp: enforce 1 MiB argument size limit on tool handlers
+6660079 debug: use per-user XDG_STATE_HOME log path with O_NOFOLLOW
+75ba363 worktree: fix TOCTOU in ensureWorktreeGitignore via Lstat+atomic rename
+acf718c shell: strip Anthropic credentials from shell subprocess env
+46ee96c mcp: disable localhost bypass for DNS-rebinding protection
 ```
 
 ---
@@ -108,10 +110,11 @@ even if surrounding worktree naming or pruning code changes.
 
 ---
 
-## 4. Per-user debug log path
+## 4. Debug log symlink hardening
 
-**Purpose.** Avoid the old shared `/tmp/ask.log` path and its symlink-attack
-surface when `ASK_DEBUG=1` is enabled.
+**Purpose.** Avoid appending debug output to the old predictable shared
+`/tmp/ask.log` path when `ASK_DEBUG=1` is enabled. The important behavior is
+the local-file hardening; the exact XDG path is an implementation detail.
 
 **Behavior details worth preserving.**
 - Debug logs prefer `$XDG_STATE_HOME/ask/ask.log`, then
@@ -247,6 +250,38 @@ Claude/Codex streams and when replaying saved Claude sessions.
 replay, and the main update loop. Re-check every provider wire shape after an
 upstream sync, especially if Codex app-server or Claude stream-json event names
 change.
+
+---
+
+## 9. Provider switch command and Codex model forwarding
+
+**Purpose.** Make provider switching reachable without relying on a terminal
+delivering `Ctrl+B`, and ensure the selected Codex model is actually sent to
+Codex app-server.
+
+**Behavior details worth preserving.**
+- `/provider` opens the same in-tab provider switcher as `Ctrl+B`.
+- The command is listed with app-level slash commands, alongside `/config`.
+- `/provider` is ignored while a provider turn is busy, matching the `Ctrl+B`
+  guard against swapping provider mid-stream.
+- `codexHandshake` includes `params["model"] = args.Model` on
+  `thread/start`/`thread/resume` when a model is selected.
+
+**Key files.**
+- `provider.go` (`appBuiltinSlashCmds`)
+- `update.go` (`handleCommand`)
+- `codex.go` (`codexHandshake`)
+- `update_test.go`
+- `codex_handshake_test.go`
+
+**Tests to re-run after rebase.**
+- `go test ./...`
+- Focused:
+  `go test ./... -run 'HandleCommand_Provider|CodexHandshake_SendsSelectedModel'`
+
+**Rebase risk.** Medium. Provider switching and Codex app-server protocol code
+are both active areas. Re-check generated Codex schemas after app-server
+updates; `ThreadStartParams` and resume params must still accept `model`.
 
 ---
 
