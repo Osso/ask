@@ -6,8 +6,17 @@ import (
 	"strings"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
+
+func isCtrlKey(msg tea.KeyPressMsg, key rune) bool {
+	want := fmt.Sprintf("ctrl+%c", key)
+	return (msg.Mod&tea.ModCtrl != 0 && msg.Code == key) ||
+		msg.Code == key-'a'+1 ||
+		msg.String() == want ||
+		msg.Keystroke() == want
+}
 
 func short(id string) string {
 	if len(id) >= 8 {

@@ -700,7 +700,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 }
 
 func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if msg.Mod == tea.ModCtrl && msg.Code == 'd' {
+	if isCtrlKey(msg, 'd') {
 		return m, closeTabCmd(m.id)
 	}
 	if m.shellMode {
@@ -719,7 +719,7 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.closeTabConfirming {
 		return m.updateCloseTabConfirm(msg)
 	}
-	isCtrlC := msg.Mod == tea.ModCtrl && msg.Code == 'c'
+	isCtrlC := isCtrlKey(msg, 'c')
 	if !isCtrlC {
 		m.exitArmed = false
 	}
@@ -743,10 +743,10 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.refreshPathMatches()
 		return m, nil
 	}
-	if msg.Mod == tea.ModCtrl && msg.Code == 'v' {
+	if isCtrlKey(msg, 'v') {
 		return m, pasteImageCmd()
 	}
-	if msg.Mod == tea.ModCtrl && msg.Code == 'b' {
+	if isCtrlKey(msg, 'b') {
 		if m.busy {
 			// Don't allow swapping mid-turn — the stream reader is
 			// tied to the current proc and the session id is about to
