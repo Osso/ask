@@ -422,6 +422,33 @@ func TestUpdate_ToolCallMsgRendersWhenEnabled(t *testing.T) {
 	}
 }
 
+func TestUpdate_ToolCallMsgWithActionsRoutesToActionsRenderer(t *testing.T) {
+	// When a toolCallMsg carries Codex commandActions, the dispatcher must
+	// pick the actions renderer so a `git status` shell call shows as
+	// "▸ git status" instead of "▸ shell\n    command: …".
+	m := newTestModel(t, newFakeProvider())
+	m.proc = &providerProc{}
+	m.toolOutputMode = toolOutputShort
+	m.quietMode = false
+	m2, _ := runUpdate(t, m, toolCallMsg{
+		name:  "shell",
+		input: map[string]any{"command": "/usr/bin/zsh -lc 'git status'"},
+		actions: []map[string]any{
+			{"type": "unknown", "command": "git status"},
+		},
+		proc: m.proc,
+	})
+	if len(m2.history) != 1 {
+		t.Fatalf("want 1 history entry, got %d", len(m2.history))
+	}
+	if !strings.Contains(m2.history[0].text, "git status") {
+		t.Errorf("history missing parsed command: %q", m2.history[0].text)
+	}
+	if strings.Contains(m2.history[0].text, "/usr/bin/zsh") {
+		t.Errorf("actions path should hide shell wrapper; got %q", m2.history[0].text)
+	}
+}
+
 func TestUpdate_ToolCallMsgDroppedWhenOff(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}

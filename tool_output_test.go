@@ -102,6 +102,151 @@ func TestParseToolOutputMode_Defaults(t *testing.T) {
 	}
 }
 
+func TestRenderToolCallActions_SingleUnknownUsesProgramAsHeader(t *testing.T) {
+	// A single Unknown action collapses into the header itself so a
+	// `git log -6` call shows as "▸ git log -6", not as a "shell" header
+	// with a noisy /usr/bin/zsh -lc wrapper underneath.
+	actions := []map[string]any{
+		{"type": "unknown", "command": "git log --oneline -6"},
+	}
+	out := renderToolCallActionsBlock("shell", actions, toolOutputShort)
+	if !strings.Contains(out, "git log --oneline -6") {
+		t.Errorf("expected unwrapped command in header; got %q", out)
+	}
+	if strings.Contains(out, "shell") {
+		t.Errorf("single-action call should not show shell fallback header; got %q", out)
+	}
+}
+
+func TestRenderToolCallActions_SingleReadShowsName(t *testing.T) {
+	actions := []map[string]any{
+		{"type": "read", "command": "cat main.go", "name": "main.go", "path": "/x/main.go"},
+	}
+	out := renderToolCallActionsBlock("shell", actions, toolOutputShort)
+	if !strings.Contains(out, "read main.go") {
+		t.Errorf("expected 'read main.go' header; got %q", out)
+	}
+}
+
+func TestRenderToolCallActions_GroupsConsecutiveReads(t *testing.T) {
+	// Multiple reads in one call collapse to a single comma-separated row,
+	// matching Codex's exec_cell rendering. Header reverts to "shell"
+	// because the rendered row count is 1 but the body is a join.
+	actions := []map[string]any{
+		{"type": "read", "name": "a.go"},
+		{"type": "read", "name": "b.go"},
+		{"type": "read", "name": "a.go"}, // duplicate dropped
+	}
+	out := renderToolCallActionsBlock("shell", actions, toolOutputShort)
+	if !strings.Contains(out, "read a.go, b.go") {
+		t.Errorf("expected grouped reads with dedup; got %q", out)
+	}
+	if strings.Count(out, "read") != 1 {
+		t.Errorf("expected exactly one 'read' row after grouping; got %q", out)
+	}
+}
+
+func TestRenderToolCallActions_MixedActionsListsRows(t *testing.T) {
+	// Mixed actions get the generic shell header and one indented row per
+	// action. Search renders "<query> in <path>"; unknown uses the program
+	// token as title.
+	actions := []map[string]any{
+		{"type": "read", "name": "main.go"},
+		{"type": "search", "query": "TODO", "path": "src/", "command": "rg TODO src/"},
+		{"type": "unknown", "command": "git status"},
+	}
+	out := renderToolCallActionsBlock("shell", actions, toolOutputShort)
+	if !strings.Contains(out, "▸") || !strings.Contains(out, "shell") {
+		t.Errorf("expected shell header for mixed actions; got %q", out)
+	}
+	for _, want := range []string{"read main.go", "search TODO in src/", "git status"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in mixed render: %q", want, out)
+		}
+	}
+}
+
+func TestRenderToolCallActions_SearchFallsBackToCommand(t *testing.T) {
+	// When a Search action has neither query nor path (Codex couldn't
+	// disambiguate), we render the raw command so the user still sees
+	// what ran instead of an empty row.
+	actions := []map[string]any{
+		{"type": "search", "command": "grep -r foo ."},
+	}
+	out := renderToolCallActionsBlock("shell", actions, toolOutputShort)
+	if !strings.Contains(out, "search grep -r foo .") {
+		t.Errorf("expected fallback to command; got %q", out)
+	}
+}
+
+func TestRenderToolCallActions_ListFilesUsesPathOrCommand(t *testing.T) {
+	withPath := []map[string]any{
+		{"type": "listFiles", "path": "src/", "command": "ls src/"},
+	}
+	if out := renderToolCallActionsBlock("shell", withPath, toolOutputShort); !strings.Contains(out, "list src/") {
+		t.Errorf("listFiles with path should use path; got %q", out)
+	}
+	noPath := []map[string]any{
+		{"type": "listFiles", "command": "ls -la"},
+	}
+	if out := renderToolCallActionsBlock("shell", noPath, toolOutputShort); !strings.Contains(out, "list ls -la") {
+		t.Errorf("listFiles without path should fall back to command; got %q", out)
+	}
+}
+
+func TestSplitProgramAndArgs(t *testing.T) {
+	cases := []struct {
+		in            string
+		wantProg      string
+		wantRest      string
+	}{
+		{"git log -6", "git", "log -6"},
+		{"git", "git", ""},
+		{"  git   status  ", "git", "status"},
+		{"", "run", ""},
+	}
+	for _, tc := range cases {
+		prog, rest := splitProgramAndArgs(tc.in)
+		if prog != tc.wantProg || rest != tc.wantRest {
+			t.Errorf("splitProgramAndArgs(%q)=(%q,%q) want (%q,%q)", tc.in, prog, rest, tc.wantProg, tc.wantRest)
+		}
+	}
+}
+
+func TestCodexCommandActions_ExtractsAndIgnoresGarbage(t *testing.T) {
+	// Codex sends commandActions as []any of map[string]any. We extract
+	// every well-formed entry and drop garbage (nil, wrong shape) so a
+	// malformed entry can't break rendering for the rest.
+	item := map[string]any{
+		"type": "commandExecution",
+		"commandActions": []any{
+			map[string]any{"type": "read", "name": "a.go"},
+			"not a map",
+			nil,
+			map[string]any{"type": "unknown", "command": "git status"},
+		},
+	}
+	got := codexCommandActions(item)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 well-formed actions; got %d (%+v)", len(got), got)
+	}
+	if t0, _ := got[0]["type"].(string); t0 != "read" {
+		t.Errorf("got[0].type=%q want read", t0)
+	}
+	if t1, _ := got[1]["type"].(string); t1 != "unknown" {
+		t.Errorf("got[1].type=%q want unknown", t1)
+	}
+}
+
+func TestCodexCommandActions_MissingFieldReturnsNil(t *testing.T) {
+	if got := codexCommandActions(map[string]any{"type": "commandExecution"}); got != nil {
+		t.Errorf("missing commandActions should return nil; got %+v", got)
+	}
+	if got := codexCommandActions(map[string]any{"type": "commandExecution", "commandActions": []any{}}); got != nil {
+		t.Errorf("empty commandActions should return nil; got %+v", got)
+	}
+}
+
 func TestRenderToolResultBlock_TruncatesLongOutput(t *testing.T) {
 	var lines []string
 	for i := 0; i < 50; i++ {

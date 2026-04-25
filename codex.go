@@ -624,15 +624,44 @@ func codexEventToMsgs(ev map[string]any, proc *providerProc) []tea.Msg {
 func codexToolOutputMsgs(item map[string]any, proc *providerProc) []tea.Msg {
 	itype, _ := item["type"].(string)
 	name, input := codexToolCallSummary(itype, item)
+	var actions []map[string]any
+	if itype == "commandExecution" {
+		actions = codexCommandActions(item)
+	}
 	output, isError := codexToolResultSummary(item)
 	var msgs []tea.Msg
 	if name != "" || len(input) > 0 {
-		msgs = append(msgs, toolCallMsg{name: name, input: input, proc: proc})
+		msgs = append(msgs, toolCallMsg{name: name, input: input, actions: actions, proc: proc})
 	}
 	if output != "" || isError {
 		msgs = append(msgs, toolResultMsg{name: name, output: output, isError: isError, proc: proc})
 	}
 	return msgs
+}
+
+// codexCommandActions extracts the parsed `commandActions` array off a
+// commandExecution item and re-types each entry as a flat map so the
+// renderer can decide how to display the call. Each entry has at least
+// a "type" field (read / listFiles / search / unknown) plus per-type
+// detail fields like name, path, query, command. Missing or malformed
+// arrays return nil so the renderer falls back to its generic path.
+func codexCommandActions(item map[string]any) []map[string]any {
+	raw, ok := item["commandActions"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, entry := range raw {
+		m, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		out = append(out, m)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // codexToolCallSummary pulls the human-readable name and input payload

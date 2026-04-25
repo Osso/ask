@@ -155,6 +155,141 @@ func renderToolCallBlock(name string, input map[string]any, mode toolOutputMode)
 	return strings.Join(lines, "\n")
 }
 
+// renderToolCallActionsBlock formats a Codex commandExecution call using
+// its parsed commandActions instead of dumping the raw shell wrapper. A
+// single action becomes the header itself ("▸ git log -6", "▸ read main.go"),
+// so a one-shot `git status` reads cleanly. Multiple actions get the generic
+// "▸ shell" header with each action indented below. Consecutive read actions
+// fold into a single comma-separated row ("read foo.go, bar.go") matching
+// Codex's own grouping in tui/src/exec_cell/render.rs.
+func renderToolCallActionsBlock(name string, actions []map[string]any, _ toolOutputMode) string {
+	rendered := compactCommandActions(actions)
+	if len(rendered) == 0 {
+		return ""
+	}
+	if len(rendered) == 1 {
+		a := rendered[0]
+		text := a.title
+		if a.body != "" {
+			text += " " + a.body
+		}
+		return outputStyle.Render(diffPathStyle.Render("▸ " + text))
+	}
+	header := diffPathStyle.Render("▸ " + nonEmpty(name, "tool"))
+	lines := []string{outputStyle.Render(header)}
+	for _, a := range rendered {
+		row := "    " + a.title
+		if a.body != "" {
+			row += " " + a.body
+		}
+		lines = append(lines, outputStyle.Render(toolInputStyle.Render(row)))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderedCommandAction is one display row produced from one or more
+// CommandAction entries. title is the leading verb ("read", "search",
+// "git", …) and body is the remainder ("foo.go, bar.go", "TODO in src/",
+// "log -6"). They render as "title body" with a single space.
+type renderedCommandAction struct {
+	title string
+	body  string
+}
+
+// compactCommandActions turns the raw commandActions slice into display
+// rows. Consecutive Read actions fold into one row with deduplicated,
+// comma-joined names so a "cat a.go b.go" call doesn't spam three lines.
+// Other action types render one-to-one; Unknown extracts the program
+// token as the title so "git log -6" shows as "git" + "log -6".
+func compactCommandActions(actions []map[string]any) []renderedCommandAction {
+	var out []renderedCommandAction
+	i := 0
+	for i < len(actions) {
+		t, _ := actions[i]["type"].(string)
+		if t == "read" {
+			var names []string
+			seen := map[string]bool{}
+			j := i
+			for j < len(actions) {
+				nt, _ := actions[j]["type"].(string)
+				if nt != "read" {
+					break
+				}
+				name, _ := actions[j]["name"].(string)
+				if name == "" {
+					name, _ = actions[j]["path"].(string)
+				}
+				if name != "" && !seen[name] {
+					seen[name] = true
+					names = append(names, name)
+				}
+				j++
+			}
+			out = append(out, renderedCommandAction{title: "read", body: strings.Join(names, ", ")})
+			i = j
+			continue
+		}
+		out = append(out, renderSingleCommandAction(actions[i]))
+		i++
+	}
+	return out
+}
+
+// renderSingleCommandAction picks the title/body for one action entry.
+// listFiles → "list <path>", search → "search <query> in <path>" (or
+// fallbacks), unknown → "<program> <rest>" with the first token used as
+// the verb so the user sees "git log" / "make build" instead of "run …".
+func renderSingleCommandAction(a map[string]any) renderedCommandAction {
+	t, _ := a["type"].(string)
+	command, _ := a["command"].(string)
+	switch t {
+	case "read":
+		name, _ := a["name"].(string)
+		if name == "" {
+			name, _ = a["path"].(string)
+		}
+		return renderedCommandAction{title: "read", body: name}
+	case "listFiles":
+		path, _ := a["path"].(string)
+		if path == "" {
+			path = command
+		}
+		return renderedCommandAction{title: "list", body: path}
+	case "search":
+		query, _ := a["query"].(string)
+		path, _ := a["path"].(string)
+		var body string
+		switch {
+		case query != "" && path != "":
+			body = query + " in " + path
+		case query != "":
+			body = query
+		default:
+			body = command
+		}
+		return renderedCommandAction{title: "search", body: body}
+	case "unknown":
+		prog, rest := splitProgramAndArgs(command)
+		return renderedCommandAction{title: prog, body: rest}
+	}
+	return renderedCommandAction{title: nonEmpty(t, "run"), body: command}
+}
+
+// splitProgramAndArgs splits a command string at its first whitespace so
+// "git log --oneline -6" becomes ("git", "log --oneline -6"). An empty
+// command falls back to "run" so the row never collapses to nothing.
+func splitProgramAndArgs(cmd string) (string, string) {
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return "run", ""
+	}
+	idx := strings.IndexAny(cmd, " \t")
+	if idx < 0 {
+		return cmd, ""
+	}
+	return cmd[:idx], strings.TrimSpace(cmd[idx:])
+}
+
 // renderToolResultBlock formats the output of a tool call. Long output
 // is clipped to toolOutputMaxLines / toolOutputMaxChars with a trailing
 // "(… N more lines)" marker. Error results render with the error style

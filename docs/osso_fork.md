@@ -396,6 +396,52 @@ clashing with the Ctrl+T transpose-character binding shells/readline use.
 
 ---
 
+## 13. Codex commandExecution action-based rendering
+
+**Purpose.** Replace the noisy `▸ shell` + `command: /usr/bin/zsh -lc 'git
+log -6'` block with Codex-style parsed-action rows so the transcript shows the
+actual intent (`▸ git log -6`, `▸ read main.go`, `▸ search TODO in src/`)
+instead of the shell wrapper Codex used to invoke the command.
+
+**Behavior details worth preserving.**
+- `codexCommandActions` extracts the `commandActions` array off a Codex
+  `commandExecution` item; missing or malformed entries are skipped and an
+  empty/missing array returns nil so the renderer falls back cleanly.
+- `toolCallMsg.actions` carries the parsed actions through to the UI; Claude
+  tool calls leave it nil so they keep the generic key/value rendering.
+- `update.go` dispatches to `renderToolCallActionsBlock` whenever
+  `len(msg.actions) > 0`, otherwise to `renderToolCallBlock`.
+- A single action collapses into the header itself: `▸ git status`,
+  `▸ read main.go`. Multiple actions get a `▸ shell` header with each action
+  as an indented row.
+- Consecutive `read` actions fold into one comma-joined row with duplicate
+  names dropped (`read a.go, b.go`), matching Codex's exec_cell grouping.
+- Action titles stay lowercase (`read`, `list`, `search`) per the user's
+  request; `unknown` actions extract the program token as the title so the
+  user sees `git log -6` rather than `run git log -6`.
+
+**Key files.**
+- `codex.go` (`codexToolOutputMsgs`, `codexCommandActions`)
+- `tool_output.go` (`renderToolCallActionsBlock`, `compactCommandActions`,
+  `renderSingleCommandAction`, `splitProgramAndArgs`)
+- `tool_output_test.go`
+- `types.go` (`toolCallMsg.actions`)
+- `update.go` (`toolCallMsg` dispatch)
+- `update_test.go`
+
+**Tests to re-run after rebase.**
+- `go test ./...`
+- Focused:
+  `go test ./... -run 'RenderToolCallActions|CodexCommandActions|SplitProgramAndArgs|ToolCallMsgWithActions'`
+
+**Rebase risk.** Medium. Tied to the Codex v2 `commandExecution` schema —
+re-check after Codex app-server schema updates that may rename
+`commandActions` or change the `CommandAction` discriminator. Touches the
+shared `toolCallMsg` struct, so any upstream tool-call wiring change needs to
+preserve the `actions` field.
+
+---
+
 ## Full verification
 
 Before declaring a rebase complete:

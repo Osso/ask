@@ -230,7 +230,11 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		if m.shouldRenderToolCall(msg) {
-			m.appendHistory(renderToolCallBlock(msg.name, msg.input, m.toolOutputMode))
+			if len(msg.actions) > 0 {
+				m.appendHistory(renderToolCallActionsBlock(msg.name, msg.actions, m.toolOutputMode))
+			} else {
+				m.appendHistory(renderToolCallBlock(msg.name, msg.input, m.toolOutputMode))
+			}
 		}
 		if m.streamCh != nil {
 			return m, nextStreamCmd(m.streamCh)

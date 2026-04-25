@@ -158,6 +158,7 @@ type toolCallMsg struct {
 	id         string
 	name       string
 	input      map[string]any
+	actions    []map[string]any
 	background bool
 	proc       *providerProc
 }
