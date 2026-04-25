@@ -76,6 +76,20 @@ func TestCodexHandshake_OmitsCwdWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestCodexHandshake_SendsSelectedModel(t *testing.T) {
+	serverOut := `{"id":2,"result":{"thread":{"id":"tid-model"}}}
+`
+	_, stdin, err := fakeHandshake(t, serverOut, ProviderSessionArgs{Model: "gpt-5.5"})
+	if err != nil {
+		t.Fatalf("handshake err: %v", err)
+	}
+	frames := decodeFrames(t, stdin.Bytes())
+	params, _ := frames[2]["params"].(map[string]any)
+	if params["model"] != "gpt-5.5" {
+		t.Errorf("thread/start.params.model=%v want gpt-5.5", params["model"])
+	}
+}
+
 func TestCodexHandshake_SkipsInterleavedNotifications(t *testing.T) {
 	// The real server emits the initialize response, then startup
 	// notifications, then the thread/start response. The handshake must

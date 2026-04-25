@@ -615,6 +615,18 @@ func TestHandleCommand_Model(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_ProviderOpensProviderSwitcher(t *testing.T) {
+	m, _, _ := providerSwitcherFixture(t)
+	m2, _ := m.handleCommand("/provider")
+	mm := m2.(model)
+	if mm.mode != modeProviderSwitch {
+		t.Errorf("/provider should enter provider switcher; got %v", mm.mode)
+	}
+	if mm.providerSwitchLevel != 0 {
+		t.Errorf("/provider should start at provider level, got %d", mm.providerSwitchLevel)
+	}
+}
+
 func TestHandleCommand_Effort(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m2, _ := m.handleCommand("/effort")

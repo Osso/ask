@@ -1322,6 +1322,11 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	case "/effort":
 		m = m.startEffortPicker()
 		return m, nil
+	case "/provider":
+		if m.busy {
+			return m, nil
+		}
+		return m.openProviderSwitch(), nil
 	case "/config":
 		m = m.startConfigModal()
 		return m, nil

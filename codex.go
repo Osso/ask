@@ -276,6 +276,9 @@ func codexHandshake(stdin io.Writer, sc *bufio.Scanner, state *codexState, args 
 	if args.Cwd != "" {
 		params["cwd"] = args.Cwd
 	}
+	if args.Model != "" {
+		params["model"] = args.Model
+	}
 	if args.SessionID != "" {
 		// Resume: thread/resume takes the thread id directly and
 		// returns the same shape as thread/start (thread{id}). Our
