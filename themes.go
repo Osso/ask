@@ -21,6 +21,7 @@ type theme struct {
 	inverseFG   color.Color
 	darkFG      color.Color
 	rowHL       color.Color
+	highlightFG color.Color
 	scrollTrack color.Color
 	tabActive   color.Color
 
@@ -375,12 +376,12 @@ func amberTheme() theme {
 	}
 }
 
-// ayuTheme mirrors Ayu Mirage, the dark-blue-grey palette with a warm amber
-// cursor. Sourced from the user's kitty current-theme.conf.
+// ayuTheme mirrors Ayu Mirage's dark-blue-grey base with Ayu/Codex yellow
+// accents. Sourced from the user's kitty and Codex theme config.
 func ayuTheme() theme {
 	return theme{
 		name:        "ayu",
-		accent:      lipgloss.Color("#FFCC66"),
+		accent:      lipgloss.Color("#E6B450"),
 		accentAlt:   lipgloss.Color("#95E6CB"),
 		prompt:      lipgloss.Color("#DABAFA"),
 		promptDot:   lipgloss.Color("#90E1C6"),
@@ -392,8 +393,9 @@ func ayuTheme() theme {
 		inverseFG:   lipgloss.Color("#CCCAC2"),
 		darkFG:      lipgloss.Color("#1F2430"),
 		rowHL:       lipgloss.Color("#242B38"),
+		highlightFG: lipgloss.Color("#E6B450"),
 		scrollTrack: lipgloss.Color("#1F2430"),
-		tabActive:   lipgloss.Color("#FFCC66"),
+		tabActive:   lipgloss.Color("#E6B450"),
 		background:  lipgloss.Color("#1F2430"),
 		foreground:  lipgloss.Color("#CCCAC2"),
 	}
@@ -573,6 +575,9 @@ func applyTheme(t theme) {
 	askOptionSelected = lipgloss.NewStyle().Foreground(t.success)
 	askOptionCursorFG = lipgloss.NewStyle().Foreground(t.dim)
 	askOptionRowStyle = lipgloss.NewStyle().Background(t.rowHL)
+	if t.highlightFG != nil {
+		askOptionRowStyle = lipgloss.NewStyle().Foreground(t.highlightFG).Bold(true)
+	}
 	askHelpStyle = lipgloss.NewStyle().Foreground(t.dim)
 	askConfirmKeyStyle = lipgloss.NewStyle().Foreground(t.accentAlt)
 	askSummaryDimStyle = lipgloss.NewStyle().Foreground(t.dim)

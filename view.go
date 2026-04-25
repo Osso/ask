@@ -83,6 +83,11 @@ func buildGlamourStyle(t theme) ansi.StyleConfig {
 
 	s.Code.StylePrimitive.Color = &mutedHex
 	s.Code.StylePrimitive.BackgroundColor = &rowHex
+	if t.highlightFG != nil {
+		highlightHex := hexOf(t.highlightFG)
+		s.Code.StylePrimitive.Color = &highlightHex
+		s.Code.StylePrimitive.BackgroundColor = nil
+	}
 
 	s.CodeBlock.StyleBlock.StylePrimitive.Color = &textHex
 	s.CodeBlock.Chroma = &ansi.Chroma{

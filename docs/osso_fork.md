@@ -159,13 +159,15 @@ steps, or a module layout change that makes `go install .` insufficient.
 
 ## 6. Ayu Mirage theme
 
-**Purpose.** Add an `ayu` theme matching Ayu Mirage's dark blue-grey palette
-with warm amber accents.
+**Purpose.** Add an `ayu` theme matching Ayu Mirage's dark blue-grey base
+with Ayu/Codex yellow accents and foreground highlights.
 
 **Behavior details worth preserving.**
 - `ayuTheme()` is registered in `themeRegistry`.
 - The theme sets explicit background and foreground colors, not only accent
   colors, so terminal OSC 10/11 matches the palette.
+- Row and inline-code highlights use Ayu/Codex yellow (`#E6B450`) as foreground text
+  instead of the Mirage blue-grey background role.
 
 **Key files.**
 - `themes.go` (`themeRegistry`, `ayuTheme`)
