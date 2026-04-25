@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -134,5 +136,80 @@ func TestCodexParseSkillsList_EnabledDefaultsToTrueWhenOmitted(t *testing.T) {
 	got := codexParseSkillsList(data)
 	if len(got) != 1 {
 		t.Errorf("missing enabled should default to keep, got %+v", got)
+	}
+}
+
+func TestCodexBaseSlashCommandsIncludesRunPlan(t *testing.T) {
+	cmds := codexProvider{}.BaseSlashCommands()
+	for _, cmd := range cmds {
+		if cmd.name == "/run-plan" {
+			if cmd.desc == "" {
+				t.Fatal("/run-plan should have a picker description")
+			}
+			return
+		}
+	}
+	t.Fatalf("Codex base slash commands missing /run-plan: %+v", cmds)
+}
+
+func TestCodexFindNextPlanItem(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "PLAN.md")
+	writeFile(t, planPath, "# Plan\n- [x] done\n- [ ] next item\n* [ ] later\n")
+
+	got, ok := codexFindNextPlanItem(planPath)
+	if !ok || got != "- [ ] next item" {
+		t.Fatalf("codexFindNextPlanItem()=(%q,%v), want first unchecked item", got, ok)
+	}
+}
+
+func TestCodexFindNextPlanItemReturnsFalseWithoutUncheckedItem(t *testing.T) {
+	dir := t.TempDir()
+	planPath := filepath.Join(dir, "PLAN.md")
+	writeFile(t, planPath, "# Plan\n- [x] done\n")
+
+	got, ok := codexFindNextPlanItem(planPath)
+	if ok || got != "" {
+		t.Fatalf("codexFindNextPlanItem()=(%q,%v), want no item", got, ok)
+	}
+}
+
+func TestCodexRunPlanPromptUsesNextItemAndPlanFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "TODO.md"), "# Plan\n* [ ] wire command\n")
+
+	prompt, envValue, ok := codexRunPlanPrompt(dir, "TODO.md")
+	if !ok {
+		t.Fatal("codexRunPlanPrompt() did not find pending item")
+	}
+	if envValue != "TODO.md" {
+		t.Fatalf("envValue=%q want TODO.md", envValue)
+	}
+	for _, want := range []string{
+		"Work on the next task from TODO.md:",
+		"* [ ] wire command",
+		"Commit after completing this item.",
+		"Check it off (change `- [ ]` to `- [x]`).",
+		"Do not delete existing items from TODO.md.",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestCodexRunPlanPromptDefaultsToPlanMD(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "PLAN.md"), "# Plan\n- [ ] default task\n")
+
+	prompt, envValue, ok := codexRunPlanPrompt(dir, "")
+	if !ok {
+		t.Fatal("codexRunPlanPrompt() did not find pending item")
+	}
+	if envValue != "1" {
+		t.Fatalf("envValue=%q want 1", envValue)
+	}
+	if !strings.Contains(prompt, "Work on the next task from PLAN.md:") {
+		t.Fatalf("prompt should name PLAN.md:\n%s", prompt)
 	}
 }

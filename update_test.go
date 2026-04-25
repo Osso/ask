@@ -652,6 +652,106 @@ func TestHandleCommand_ProviderSlashForwardsThroughSend(t *testing.T) {
 	}
 }
 
+func TestHandleCommand_CodexRunPlanSubmitsNextPlanItem(t *testing.T) {
+	fp := newFakeProvider()
+	fp.id = "codex"
+	m := newTestModel(t, fp)
+	writeFile(t, filepath.Join(m.cwd, "PLAN.md"), "# Plan\n- [x] done\n- [ ] next task\n")
+	t.Setenv("PLAN_FILE", "")
+
+	m2, cmd := m.handleCommand("/run-plan")
+	mm := m2.(model)
+	done := runProviderStartCmd(t, cmd)
+	mm, _ = runUpdate(t, mm, done)
+
+	if len(fp.sentTexts) != 1 {
+		t.Fatalf("sentTexts=%+v want one generated prompt", fp.sentTexts)
+	}
+	for _, want := range []string{
+		"Work on the next task from PLAN.md:",
+		"- [ ] next task",
+		"Commit after completing this item.",
+		"Do not delete existing items from PLAN.md.",
+	} {
+		if !strings.Contains(fp.sentTexts[0], want) {
+			t.Fatalf("generated prompt missing %q:\n%s", want, fp.sentTexts[0])
+		}
+	}
+	if got := os.Getenv("PLAN_FILE"); got != "1" {
+		t.Fatalf("PLAN_FILE=%q want 1", got)
+	}
+	if mm.provider.ID() != "codex" {
+		t.Errorf("provider changed during /run-plan")
+	}
+}
+
+func TestHandleCommand_CodexRunPlanAcceptsCustomPlanFile(t *testing.T) {
+	fp := newFakeProvider()
+	fp.id = "codex"
+	m := newTestModel(t, fp)
+	writeFile(t, filepath.Join(m.cwd, "WORK.md"), "# Plan\n* [ ] custom task\n")
+	t.Setenv("PLAN_FILE", "")
+
+	m2, cmd := m.handleCommand("/run-plan WORK.md")
+	mm := m2.(model)
+	done := runProviderStartCmd(t, cmd)
+	_, _ = runUpdate(t, mm, done)
+
+	if len(fp.sentTexts) != 1 || !strings.Contains(fp.sentTexts[0], "Work on the next task from WORK.md:") {
+		t.Fatalf("custom plan prompt not sent: %+v", fp.sentTexts)
+	}
+	if got := os.Getenv("PLAN_FILE"); got != "WORK.md" {
+		t.Fatalf("PLAN_FILE=%q want WORK.md", got)
+	}
+}
+
+func TestHandleCommand_CodexRunPlanRestartsExistingProviderForPlanEnv(t *testing.T) {
+	fp := newFakeProvider()
+	fp.id = "codex"
+	m := newTestModel(t, fp)
+	m.proc = &providerProc{stdin: &bufferCloser{Buffer: &bytes.Buffer{}}}
+	m.sessionID = "thread-1"
+	writeFile(t, filepath.Join(m.cwd, "PLAN.md"), "# Plan\n- [ ] next task\n")
+	t.Setenv("PLAN_FILE", "")
+
+	m2, cmd := m.handleCommand("/run-plan")
+	mm := m2.(model)
+	if mm.proc != nil {
+		t.Fatal("/run-plan should stop existing provider so new process inherits PLAN_FILE")
+	}
+	done := runProviderStartCmd(t, cmd)
+	mm, _ = runUpdate(t, mm, done)
+
+	if got := os.Getenv("PLAN_FILE"); got != "1" {
+		t.Fatalf("PLAN_FILE=%q want 1", got)
+	}
+	if len(fp.startArgs) != 1 || fp.startArgs[0].SessionID != "thread-1" {
+		t.Fatalf("provider start args=%+v want resume of thread-1", fp.startArgs)
+	}
+	if len(fp.sentTexts) != 1 || !strings.Contains(fp.sentTexts[0], "- [ ] next task") {
+		t.Fatalf("plan prompt not sent after restart: %+v", fp.sentTexts)
+	}
+}
+
+func TestHandleCommand_CodexRunPlanReportsNoPendingTask(t *testing.T) {
+	fp := newFakeProvider()
+	fp.id = "codex"
+	m := newTestModel(t, fp)
+	writeFile(t, filepath.Join(m.cwd, "PLAN.md"), "# Plan\n- [x] done\n")
+
+	m2, cmd := m.handleCommand("/run-plan")
+	mm := m2.(model)
+	if cmd != nil {
+		t.Fatal("no pending task should not start provider")
+	}
+	if len(fp.sentTexts) != 0 {
+		t.Fatalf("no prompt should be sent, got %+v", fp.sentTexts)
+	}
+	if len(mm.history) == 0 || !strings.Contains(mm.history[len(mm.history)-1].text, "No pending tasks in PLAN.md.") {
+		t.Fatalf("missing no-pending history message: %+v", mm.history)
+	}
+}
+
 func TestCancelTurn_DoesNothingWhenIdle(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	out, _ := m.cancelTurn()

@@ -1330,6 +1330,10 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	case "/config":
 		m = m.startConfigModal()
 		return m, nil
+	case "/run-plan":
+		if m.provider.ID() == "codex" {
+			return m.handleCodexRunPlan(line)
+		}
 	}
 	bare := strings.TrimPrefix(cmd, "/")
 	for _, e := range m.providerSlashCmds {
@@ -1339,6 +1343,28 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	}
 	m.appendHistory(outputStyle.Render(errStyle.Render("unknown command: " + cmd)))
 	return m, nil
+}
+
+func (m model) handleCodexRunPlan(line string) (tea.Model, tea.Cmd) {
+	_, arg, _ := strings.Cut(line, " ")
+	planFile := strings.TrimSpace(arg)
+	prompt, envValue, ok := codexRunPlanPrompt(m.cwd, planFile)
+	if !ok {
+		displayName := planFile
+		if displayName == "" {
+			displayName = "PLAN.md"
+		}
+		m.appendHistory(outputStyle.Render(promptStyle.Render("No pending tasks in " + displayName + ".")))
+		return m, nil
+	}
+	if err := os.Setenv("PLAN_FILE", envValue); err != nil {
+		m.appendHistory(outputStyle.Render(errStyle.Render("set PLAN_FILE failed: " + err.Error())))
+		return m, nil
+	}
+	if m.proc != nil {
+		m.killProc()
+	}
+	return m.sendToProvider(prompt)
 }
 
 func persistSlashCmdsCmd(p Provider, cmds []providerSlashEntry) tea.Cmd {

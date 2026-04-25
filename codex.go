@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -108,6 +111,7 @@ func (codexProvider) BaseSlashCommands() []slashCmd {
 		{"/clear", "start a new Codex session"},
 		{"/model", "select the Codex model"},
 		{"/effort", "select the Codex reasoning effort"},
+		{"/run-plan", "set PLAN_FILE and work on next plan item (optional: /run-plan <file>)"},
 	}
 }
 
@@ -962,6 +966,39 @@ func codexParseSkillsList(data []any) []providerSlashEntry {
 		}
 	}
 	return out
+}
+
+func codexFindNextPlanItem(planPath string) (string, bool) {
+	data, err := os.ReadFile(planPath)
+	if err != nil {
+		return "", false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- [ ]") || strings.HasPrefix(trimmed, "* [ ]") {
+			return trimmed, true
+		}
+	}
+	return "", false
+}
+
+func codexRunPlanPrompt(cwd, planFile string) (prompt, envValue string, ok bool) {
+	if planFile == "" {
+		planFile = "PLAN.md"
+		envValue = "1"
+	} else {
+		envValue = planFile
+	}
+	item, ok := codexFindNextPlanItem(filepath.Join(cwd, planFile))
+	if !ok {
+		return "", envValue, false
+	}
+	return fmt.Sprintf(
+		"Work on the next task from %s:\n%s\n\nCommit after completing this item. Check it off (change `- [ ]` to `- [x]`). Do not delete existing items from %s.",
+		planFile,
+		item,
+		planFile,
+	), envValue, true
 }
 
 // codexParseModelList pulls model ids out of a /model/list data

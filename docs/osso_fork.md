@@ -225,7 +225,41 @@ change.
 
 ---
 
-## 8. Ctrl+D quits the whole app
+## 8. Codex `/run-plan` command mirror
+
+**Purpose.** Show and handle the Codex fork's `/run-plan` command inside ask.
+Codex app-server exposes `skills/list`, but it does not expose built-in TUI
+slash commands, so ask mirrors this command locally.
+
+**Behavior details worth preserving.**
+- `/run-plan` appears in Codex's base slash-command list.
+- `/run-plan` reads `PLAN.md`; `/run-plan <file>` reads the supplied plan file.
+- The first unchecked `- [ ]` or `* [ ]` item is submitted as a generated Codex
+  prompt.
+- `PLAN_FILE=1` is set for the default plan and `PLAN_FILE=<file>` for a custom
+  plan, matching the Codex fork's hook contract.
+- When no pending item exists, ask reports `No pending tasks in <file>.` and
+  does not start a provider turn.
+
+**Key files.**
+- `codex.go` (`BaseSlashCommands`, `codexRunPlanPrompt`,
+  `codexFindNextPlanItem`)
+- `update.go` (`handleCommand`, `handleCodexRunPlan`)
+- `codex_skills_test.go`
+- `update_test.go`
+
+**Tests to re-run after rebase.**
+- `go test ./...`
+- Focused:
+  `go test ./... -run 'CodexFindNextPlanItem|CodexRunPlanPrompt|HandleCommand_CodexRunPlan'`
+
+**Rebase risk.** Medium. If upstream Codex changes `/run-plan` wording,
+`PLAN_FILE` semantics, or app-server grows a built-in command API, update or
+remove ask's mirror instead of letting behavior drift.
+
+---
+
+## 9. Ctrl+D quits the whole app
 
 **Purpose.** Match Codex CLI's `Ctrl+D` behavior: quit the app immediately
 instead of closing only the active tab.
@@ -255,7 +289,7 @@ re-check if upstream changes tab lifecycle, quit handling, or cleanup paths.
 
 ---
 
-## 9. Provider switch command and Codex model forwarding
+## 10. Provider switch command and Codex model forwarding
 
 **Purpose.** Make provider switching reachable without relying on a terminal
 delivering `Ctrl+B`, and ensure the selected Codex model is actually sent to
