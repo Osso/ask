@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 func testAppWithTwoTabs(t *testing.T) app {
 	t.Helper()
@@ -74,6 +79,68 @@ func TestApp_ProviderInitLoadedStaysOnOwningTab(t *testing.T) {
 	}
 	if len(a2.tabs[1].providerSlashCmds) != 1 || a2.tabs[1].providerSlashCmds[0].Name != "two" {
 		t.Errorf("tab 2 slash cmds=%+v want unchanged entries", a2.tabs[1].providerSlashCmds)
+	}
+}
+
+func TestApp_CtrlZSuspendsAndAnnouncesBackgroundOnActiveTabOnly(t *testing.T) {
+	a := testAppWithTwoTabs(t)
+	a.tabs[0].input.SetValue("inactive draft")
+	a.tabs[1].input.SetValue("active draft")
+
+	newA, cmd := a.Update(tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
+	a2, ok := newA.(app)
+	if !ok {
+		t.Fatalf("Update returned %T, want app", newA)
+	}
+
+	if cmd == nil {
+		t.Fatal("Ctrl+Z must return tea.Suspend; got nil cmd")
+	}
+	if msg := cmd(); msg != (tea.SuspendMsg{}) {
+		t.Errorf("cmd should yield tea.SuspendMsg{}, got %T %+v", msg, msg)
+	}
+
+	active := a2.tabs[a2.active]
+	if len(active.history) != 1 {
+		t.Fatalf("active tab history=%+v want 1 backgrounded entry", active.history)
+	}
+	if !strings.Contains(active.history[0].text, "backgrounded") {
+		t.Errorf("active tab history[0]=%q must mention 'backgrounded'", active.history[0].text)
+	}
+	if !strings.Contains(active.history[0].text, "fg") {
+		t.Errorf("active tab history[0]=%q should hint at `fg` resume", active.history[0].text)
+	}
+
+	inactive := a2.tabs[1-a2.active]
+	if len(inactive.history) != 0 {
+		t.Errorf("inactive tab history should stay empty; got %+v", inactive.history)
+	}
+
+	// The keypress must be consumed by the app, not forwarded to the
+	// active tab's textarea — otherwise a stray 'z' would land in the
+	// input on every suspend.
+	if got := active.input.Value(); got != "active draft" {
+		t.Errorf("active tab input mutated by Ctrl+Z: got %q want %q", got, "active draft")
+	}
+	if got := inactive.input.Value(); got != "inactive draft" {
+		t.Errorf("inactive tab input mutated by Ctrl+Z: got %q want %q", got, "inactive draft")
+	}
+}
+
+// Ctrl+Z must suspend even when the active tab is in a non-input mode
+// (modal, picker, shell). We exercise the modal path here as a stand-in
+// for "any non-input mode" — the dispatch happens at the app layer
+// before mode-specific routing, so all of them share the same gate.
+func TestApp_CtrlZSuspendsRegardlessOfActiveTabMode(t *testing.T) {
+	a := testAppWithTwoTabs(t)
+	a.tabs[a.active].mode = modeAskQuestion
+
+	_, cmd := a.Update(tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
+	if cmd == nil {
+		t.Fatal("Ctrl+Z in modal mode must still return tea.Suspend")
+	}
+	if msg := cmd(); msg != (tea.SuspendMsg{}) {
+		t.Errorf("cmd should yield tea.SuspendMsg{}, got %T", msg)
 	}
 }
 

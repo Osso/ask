@@ -34,6 +34,18 @@ func closeTabCmd(tabID int) tea.Cmd {
 	return func() tea.Msg { return closeTabMsg{tabID: tabID} }
 }
 
+// suspendApp announces the backgrounding on the visible tab and returns
+// tea.Suspend. tea.Suspend SIGTSTPs the whole process group so any
+// claude/codex child pauses with ask; on SIGCONT (the shell's `fg`)
+// bubbletea rearms the terminal and re-emits WindowSizeMsg on its own,
+// which is why there is no ResumeMsg handler.
+func (a app) suspendApp() (tea.Model, tea.Cmd) {
+	active := a.activeTab()
+	active.appendHistory(outputStyle.Render(dimStyle.Render(
+		"backgrounded — type `fg` to resume")))
+	return a, tea.Suspend
+}
+
 func (a app) activeTab() *model { return a.tabs[a.active] }
 
 // tabBarHeight returns 1 when more than one tab is open; the active tab's
@@ -72,6 +84,9 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.broadcastResize()
 
 	case tea.KeyPressMsg:
+		if m.Mod == tea.ModCtrl && m.Code == 'z' {
+			return a.suspendApp()
+		}
 		if m.Mod == tea.ModCtrl && m.Code == 't' {
 			return a.openTab()
 		}
