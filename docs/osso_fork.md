@@ -264,7 +264,36 @@ command API, update or remove ask's mirrors instead of letting behavior drift.
 
 ---
 
-## 9. Ctrl+D quits the whole app
+## 9. Slash completion Enter dispatch
+
+**Purpose.** Pressing Enter while the slash-command picker is open should run
+the highlighted completion, not submit the partially typed prefix as an unknown
+command.
+
+**Behavior details worth preserving.**
+- Tab still accepts the highlighted slash command into the input without
+  submitting it.
+- Enter promotes the highlighted slash completion to the submitted command line
+  before recording input history and dispatching.
+- Prefixes like `/comp` therefore dispatch `/compact` when `/compact` is the
+  highlighted completion.
+
+**Key files.**
+- `update.go` (`KeyEnter` handling in `updateInput`)
+- `update_test.go`
+
+**Tests to re-run after rebase.**
+- `go test ./...`
+- Focused:
+  `go test ./... -run 'FilterSlashCmds|LockModifiers|EnterAcceptsSlashCompletion'`
+
+**Rebase risk.** Medium. This sits in the shared input key dispatcher; re-check
+if upstream changes slash picker semantics, history recording, or path-picker
+Enter handling.
+
+---
+
+## 10. Ctrl+D quits the whole app
 
 **Purpose.** Match Codex CLI's `Ctrl+D` behavior: quit the app immediately
 instead of closing only the active tab.
@@ -294,7 +323,7 @@ re-check if upstream changes tab lifecycle, quit handling, or cleanup paths.
 
 ---
 
-## 10. Provider switch command and Codex model forwarding
+## 11. Provider switch command and Codex model forwarding
 
 **Purpose.** Make provider switching reachable without relying on a terminal
 delivering `Ctrl+B`, and ensure the selected Codex model is actually sent to

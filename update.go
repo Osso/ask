@@ -857,11 +857,16 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// prefix (e.g. "/omc" alongside "/omc-ab") — fall through to
 			// the regular submit path so the user can run the short one.
 			if menuOpen && !slashCmdsContain(items, val) {
-				pick := items[m.menuIdx].name
-				m.input.SetValue(pick)
-				m.menuIdx = 0
-				m.resetHistoryNav()
-				return m, nil
+				if len(items) == 1 {
+					val = items[0].name
+					line = val
+				} else {
+					pick := items[m.menuIdx].name
+					m.input.SetValue(pick)
+					m.menuIdx = 0
+					m.resetHistoryNav()
+					return m, nil
+				}
 			}
 			if line == "" && len(m.pending) == 0 {
 				return m, nil

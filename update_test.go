@@ -798,6 +798,34 @@ func TestHandleCommand_CodexCompactRequiresActiveThread(t *testing.T) {
 	}
 }
 
+func TestUpdate_EnterAcceptsSlashCompletionAndRunsCommand(t *testing.T) {
+	m := newTestModel(t, codexProvider{})
+	stdin := &bytes.Buffer{}
+	m.proc = &providerProc{payload: &codexState{
+		stdin:    stdin,
+		threadID: "thr_123",
+		nextID:   41,
+	}}
+	m.input.SetValue("/comp")
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on slash completion should run selected command")
+	}
+	if !m2.busy || m2.status != "compacting…" {
+		t.Fatalf("busy/status=(%v,%q), want compacting state", m2.busy, m2.status)
+	}
+	if got := m2.input.Value(); got != "" {
+		t.Fatalf("input=%q want cleared after command", got)
+	}
+	if len(m2.inputHistory) != 1 || m2.inputHistory[0] != "/compact" {
+		t.Fatalf("inputHistory=%+v want selected slash command", m2.inputHistory)
+	}
+	if got := stdin.String(); !strings.Contains(got, `"method":"thread/compact/start"`) {
+		t.Fatalf("compact request missing method: %s", got)
+	}
+}
+
 func TestCancelTurn_DoesNothingWhenIdle(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	out, _ := m.cancelTurn()
