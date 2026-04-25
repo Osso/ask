@@ -1,5 +1,23 @@
 # Repo notes for coding agents
 
+## Fork maintenance
+
+This branch is maintained as a small, reviewable patch stack on top of
+`upstream/main` (`Cidan/ask`), not as an append-only history. Keep commits as
+independent behavioral patches that can be rebased, dropped, or carried forward
+one at a time.
+
+- `docs/osso_fork.md` is the patch-stack checklist. Update it whenever adding,
+  removing, or materially changing a fork behavior.
+- Do not leave commits that merely cancel earlier fork commits. If a local patch
+  is no longer wanted, remove it from the stack during the rebase/cleanup and
+  update `docs/osso_fork.md` instead of adding a revert commit on top.
+- Omit documentation-only commits and intentionally removed patches from the
+  `docs/osso_fork.md` patch list. The list should describe the behavioral
+  deltas that still need to be maintained against upstream.
+- Before declaring the stack clean, compare `git log --oneline upstream/main..HEAD`
+  with `docs/osso_fork.md` and make sure there are no do/undo pairs.
+
 ## Documentation
 
 Always look at the bubbletea 2.0 documentation in the main bubbletea readme

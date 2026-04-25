@@ -5,20 +5,19 @@ This document enumerates every behavioral change the Osso fork carries on top of
 upstream: each section lists what the patch does, where it lives, how to
 exercise it, and what to re-verify after the rebase lands.
 
-Baseline: diff range `upstream/main..HEAD`. Regenerate the commit list with
+Baseline: diff range `upstream/main..HEAD`. Regenerate the patch list with
 `git log --oneline upstream/main..HEAD`, then omit documentation-only commits
-when refreshing this doc.
+and patches that have intentionally been removed from the stack.
 
 Current patch stack:
 
 ```text
-e442815 Add provider switch command
-2a331ed Render tool outputs in stream and session replay
-4b387ef themes: add ayu (mirage) palette
-412d253 claude: route permission prompts to claude-bash-hook-approval MCP
-98d577a deploy: local build+test+install script
-962312b mcp: enforce 1 MiB argument size limit on tool handlers
-6660079 debug: use per-user XDG_STATE_HOME log path with O_NOFOLLOW
+40bc6d6 Add provider switch command
+faa1e41 Render tool outputs in stream and session replay
+97c329b themes: add ayu (mirage) palette
+4fb4c21 claude: route permission prompts to claude-bash-hook-approval MCP
+aa8246e deploy: local build+test+install script
+e2d4831 mcp: enforce 1 MiB argument size limit on tool handlers
 75ba363 worktree: fix TOCTOU in ensureWorktreeGitignore via Lstat+atomic rename
 acf718c shell: strip Anthropic credentials from shell subprocess env
 46ee96c mcp: disable localhost bypass for DNS-rebinding protection
@@ -108,36 +107,7 @@ atomically.
 the `.gitignore` helper. Preserve the Lstat/symlink refusal and atomic rename
 even if surrounding worktree naming or pruning code changes.
 
----
-
-## 4. Debug log symlink hardening
-
-**Purpose.** Avoid appending debug output to the old predictable shared
-`/tmp/ask.log` path when `ASK_DEBUG=1` is enabled. The important behavior is
-the local-file hardening; the exact XDG path is an implementation detail.
-
-**Behavior details worth preserving.**
-- Debug logs prefer `$XDG_STATE_HOME/ask/ask.log`, then
-  `$HOME/.local/state/ask/ask.log`, then `$TMPDIR/ask-<uid>.log`.
-- The log directory is created with `0700`.
-- The log file is opened with `0600` and `O_NOFOLLOW`.
-- Failure to create/open the log reports to stderr and disables debug logging
-  rather than panicking.
-
-**Key files.**
-- `debug.go` (`debugLogPath`, `debugLog`)
-
-**Tests to re-run after rebase.**
-- `go test ./...`
-- Add/keep focused tests if debug path behavior changes; be careful that
-  `debugInit`/`debugOn` are package globals.
-
-**Rebase risk.** Low. This file is small, but debug logging is used across async
-boundaries, so preserve non-panicking behavior.
-
----
-
-## 5. Claude permission approval MCP routing
+## 4. Claude permission approval MCP routing
 
 **Purpose.** Route Claude Code permission prompts to the external
 `claude-bash-hook-approval` MCP approval tool rather than the embedded `ask`
@@ -163,7 +133,7 @@ changes.
 
 ---
 
-## 6. Local deploy helper
+## 5. Local deploy helper
 
 **Purpose.** Provide one local command that builds, tests, installs, and prints
 the installed binary path plus commit.
@@ -185,7 +155,7 @@ steps, or a module layout change that makes `go install .` insufficient.
 
 ---
 
-## 7. Ayu Mirage theme
+## 6. Ayu Mirage theme
 
 **Purpose.** Add an `ayu` theme matching Ayu Mirage's dark blue-grey palette
 with warm amber accents.
@@ -207,7 +177,7 @@ theme ordering matters for picker display.
 
 ---
 
-## 8. Tool output rendering in live streams and replay
+## 7. Tool output rendering in live streams and replay
 
 **Purpose.** Tool outputs should be visible in the transcript, not just tool
 status lines or diffs. The fork renders stdout/stderr/error text during live
@@ -253,7 +223,7 @@ change.
 
 ---
 
-## 9. Provider switch command and Codex model forwarding
+## 8. Provider switch command and Codex model forwarding
 
 **Purpose.** Make provider switching reachable without relying on a terminal
 delivering `Ctrl+B`, and ensure the selected Codex model is actually sent to
