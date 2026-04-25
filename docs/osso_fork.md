@@ -12,15 +12,17 @@ and patches that have intentionally been removed from the stack.
 Current patch stack:
 
 ```text
-40bc6d6 Add provider switch command
-faa1e41 Render tool outputs in stream and session replay
-97c329b themes: add ayu (mirage) palette
-4fb4c21 claude: route permission prompts to claude-bash-hook-approval MCP
-aa8246e deploy: local build+test+install script
-e2d4831 mcp: enforce 1 MiB argument size limit on tool handlers
-75ba363 worktree: fix TOCTOU in ensureWorktreeGitignore via Lstat+atomic rename
-acf718c shell: strip Anthropic credentials from shell subprocess env
-46ee96c mcp: disable localhost bypass for DNS-rebinding protection
+11c4d0e Normalize Bubble Tea key matching
+fa86de9 Make Ctrl-D quit ask
+3ffee0a Add provider switch command
+ed01956 Render tool outputs in stream and session replay
+322b43b themes: add ayu (mirage) palette
+8f114e3 claude: route permission prompts to claude-bash-hook-approval MCP
+cfd2dad deploy: local build+test+install script
+b187d8c mcp: enforce 1 MiB argument size limit on tool handlers
+1dbebdb worktree: fix TOCTOU in ensureWorktreeGitignore via Lstat+atomic rename
+60751bd shell: strip Anthropic credentials from shell subprocess env
+e57465c mcp: disable localhost bypass for DNS-rebinding protection
 ```
 
 ---
@@ -223,7 +225,37 @@ change.
 
 ---
 
-## 8. Provider switch command and Codex model forwarding
+## 8. Ctrl+D quits the whole app
+
+**Purpose.** Match Codex CLI's `Ctrl+D` behavior: quit the app immediately
+instead of closing only the active tab.
+
+**Behavior details worth preserving.**
+- The app wrapper intercepts `Ctrl+D` before dispatching to the active tab.
+- `Ctrl+D` matching accepts both Bubble Tea v2 forms: `ModCtrl + 'd'`,
+  `msg.String()`/`msg.Keystroke()` equal to `ctrl+d`, and the raw control-code
+  shape (`0x04`).
+- Quit drains pending replies, kills provider and shell subprocesses, and stops
+  each tab's MCP bridge before returning `tea.Quit`.
+- `Ctrl+C` twice on an empty idle prompt remains the tab-close path.
+
+**Key files.**
+- `util.go` (`isCtrlKey`)
+- `tabs.go` (`app.Update`, `app.quit`)
+- `tabs_test.go`
+- `README.md`
+
+**Tests to re-run after rebase.**
+- `go test ./...`
+- Focused:
+  `go test ./... -run TestApp_CtrlD`
+
+**Rebase risk.** Low to medium. This lives in the app-level key dispatcher;
+re-check if upstream changes tab lifecycle, quit handling, or cleanup paths.
+
+---
+
+## 9. Provider switch command and Codex model forwarding
 
 **Purpose.** Make provider switching reachable without relying on a terminal
 delivering `Ctrl+B`, and ensure the selected Codex model is actually sent to
