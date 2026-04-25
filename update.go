@@ -752,6 +752,19 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			line := strings.TrimSpace(val)
 			debugLog("Enter line=%q valLen=%d busy=%v pending=%d pathCmd=%q bare=%q",
 				line, len(val), m.busy, len(m.pending), m.pathPickerCmd(), bareCommand(line))
+			// Slash menu open + the typed value is not yet a registered
+			// command exactly: Enter completes the highlighted entry
+			// instead of submitting (mirrors Tab). When the value IS an
+			// exact match — even with longer commands also matching the
+			// prefix (e.g. "/omc" alongside "/omc-ab") — fall through to
+			// the regular submit path so the user can run the short one.
+			if menuOpen && !slashCmdsContain(items, val) {
+				pick := items[m.menuIdx].name
+				m.input.SetValue(pick)
+				m.menuIdx = 0
+				m.resetHistoryNav()
+				return m, nil
+			}
 			if line == "" && len(m.pending) == 0 {
 				return m, nil
 			}
@@ -1260,6 +1273,21 @@ func (m *model) historyNext() {
 		m.input.SetValue(m.inputHistory[m.historyIdx])
 		m.input.CursorEnd()
 	}
+}
+
+// slashCmdsContain reports whether typed exactly matches one of items'
+// command names. Enter uses it to decide between autocomplete (no
+// exact match) and submit (exact match) when the typed value is also
+// a strict prefix of longer registered commands. typed must be the
+// raw input.Value() so the comparand stays aligned with how
+// filterSlashCmds populated items in the first place.
+func slashCmdsContain(items []slashCmd, typed string) bool {
+	for _, c := range items {
+		if c.name == typed {
+			return true
+		}
+	}
+	return false
 }
 
 func (m model) filterSlashCmds() []slashCmd {

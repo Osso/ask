@@ -790,6 +790,98 @@ func TestFilterSlashCmds_PrefixFiltering(t *testing.T) {
 	}
 }
 
+// Enter on an open slash menu fills the highlighted command into the
+// input instead of submitting, but only when the typed value is not
+// already an exact match. Mirrors the existing Tab behavior.
+func TestUpdate_SlashMenuEnterAutocompletesWhenNoExactMatch(t *testing.T) {
+	fp := newFakeProvider()
+	fp.baseSlash = nil
+	m := newTestModel(t, fp)
+	m.providerSlashCmds = []providerSlashEntry{{Name: "omc"}, {Name: "omc-ab"}}
+	m.input.SetValue("/om")
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+
+	if m2.input.Value() != "/omc" {
+		t.Errorf("Enter on partial match must autocomplete to /omc; got %q", m2.input.Value())
+	}
+	if cmd != nil {
+		t.Errorf("Enter on partial match must not return a submit cmd; got %T", cmd)
+	}
+	if len(fp.sentTexts) != 0 {
+		t.Errorf("provider must not receive anything on autocomplete; got %v", fp.sentTexts)
+	}
+	for _, h := range m2.history {
+		if h.kind == histUser {
+			t.Errorf("autocomplete must not append a user history entry; got %+v", h)
+		}
+	}
+	if m2.menuIdx != 0 {
+		t.Errorf("menuIdx must reset to 0 after autocomplete, got %d", m2.menuIdx)
+	}
+}
+
+// When the typed value already matches a registered command exactly,
+// Enter submits even if the menu also lists longer commands sharing
+// the prefix. Exact-match detection scans the full slice, so the
+// behavior is the same regardless of registration order.
+func TestUpdate_SlashMenuEnterSubmitsExactMatchAmongOverlapping(t *testing.T) {
+	cases := []struct {
+		name string
+		regs []providerSlashEntry
+	}{
+		{"shortFirst", []providerSlashEntry{{Name: "omc"}, {Name: "omc-ab"}}},
+		{"longFirst", []providerSlashEntry{{Name: "omc-ab"}, {Name: "omc"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fp := newFakeProvider()
+			fp.baseSlash = nil
+			m := newTestModel(t, fp)
+			m.providerSlashCmds = c.regs
+			m.input.SetValue("/omc")
+
+			if items := m.filterSlashCmds(); len(items) < 2 {
+				t.Fatalf("setup: expected both /omc and /omc-ab in menu, got %+v", items)
+			}
+
+			m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+			if m2.input.Value() != "" {
+				t.Errorf("exact-match Enter must clear input on submit; got %q", m2.input.Value())
+			}
+			if cmd == nil {
+				t.Fatal("exact-match Enter must return a submit cmd")
+			}
+			done := runProviderStartCmd(t, cmd)
+			_, _ = runUpdate(t, m2, done)
+			if len(fp.sentTexts) != 1 || fp.sentTexts[0] != "/omc" {
+				t.Errorf("provider must receive /omc verbatim; got %v", fp.sentTexts)
+			}
+		})
+	}
+}
+
+func TestSlashCmdsContain(t *testing.T) {
+	items := []slashCmd{{name: "/omc"}, {name: "/omc-ab"}, {name: "/new"}}
+	cases := []struct {
+		typed string
+		want  bool
+	}{
+		{"/omc", true},
+		{"/omc-ab", true},
+		{"/new", true},
+		{"/om", false},
+		{"/", false},
+		{"", false},
+		{"omc", false},
+	}
+	for _, c := range cases {
+		if got := slashCmdsContain(items, c.typed); got != c.want {
+			t.Errorf("slashCmdsContain(%q)=%v want %v", c.typed, got, c.want)
+		}
+	}
+}
+
 func TestFilterSlashCmds_DeDupBuiltinsAndProvider(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	// Provider slash includes "new" which fakeProvider already advertises
