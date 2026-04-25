@@ -466,6 +466,9 @@ var (
 	diffDelStyle        lipgloss.Style
 	diffContextStyle    lipgloss.Style
 
+	toolInputStyle  lipgloss.Style
+	toolResultStyle lipgloss.Style
+
 	askBoxStyle              lipgloss.Style
 	askTabStyle              lipgloss.Style
 	askTabActiveStyle        lipgloss.Style
@@ -566,6 +569,8 @@ func applyTheme(t theme) {
 	diffAddStyle = lipgloss.NewStyle().Foreground(t.success)
 	diffDelStyle = lipgloss.NewStyle().Foreground(t.errorFG)
 	diffContextStyle = lipgloss.NewStyle().Foreground(t.dim)
+	toolInputStyle = lipgloss.NewStyle().Foreground(t.muted)
+	toolResultStyle = lipgloss.NewStyle().Foreground(t.muted)
 
 	askBoxStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).

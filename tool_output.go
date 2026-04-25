@@ -150,7 +150,7 @@ func renderToolCallBlock(name string, input map[string]any, mode toolOutputMode)
 	header := diffPathStyle.Render("▸ " + nonEmpty(name, "tool"))
 	lines := []string{outputStyle.Render(header)}
 	for _, k := range sortedKeys(input) {
-		lines = append(lines, outputStyle.Render(diffContextStyle.Render("    "+k+": "+formatToolInputValue(input[k]))))
+		lines = append(lines, outputStyle.Render(toolInputStyle.Render("    "+k+": "+formatToolInputValue(input[k]))))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -163,14 +163,14 @@ func renderToolResultBlock(output string, isError bool) string {
 	body, trimmedLines := clampToolOutput(output)
 	var rows []string
 	for _, ln := range strings.Split(body, "\n") {
-		styled := diffContextStyle.Render("    " + ln)
+		styled := toolResultStyle.Render("    " + ln)
 		if isError {
 			styled = errStyle.Render("    " + ln)
 		}
 		rows = append(rows, outputStyle.Render(styled))
 	}
 	if trimmedLines > 0 {
-		rows = append(rows, outputStyle.Render(diffContextStyle.Render(
+		rows = append(rows, outputStyle.Render(toolResultStyle.Render(
 			"    (… "+pluralLines(trimmedLines)+" omitted)")))
 	}
 	return strings.Join(rows, "\n")
