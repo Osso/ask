@@ -51,6 +51,78 @@ func TestApp_SessionsLoadedStaysOnOwningTab(t *testing.T) {
 	}
 }
 
+func TestApp_CtrlDExitsShellModeFirst(t *testing.T) {
+	a := testAppWithTwoTabs(t)
+	a.tabs[a.active].shellMode = true
+
+	newM, cmd := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
+	a2 := newM.(app)
+	if a2.tabs[a2.active].shellMode {
+		t.Fatal("ctrl+d in shell mode should clear shellMode")
+	}
+	if len(a2.tabs) != 2 {
+		t.Fatalf("ctrl+d in shell mode must not close a tab; got %d tabs", len(a2.tabs))
+	}
+	if cmd != nil {
+		if msg, ok := cmd().(tea.QuitMsg); ok {
+			t.Fatalf("ctrl+d in shell mode must not quit; got %T", msg)
+		}
+	}
+}
+
+func TestApp_CtrlDClosesTabWhenMultipleOpen(t *testing.T) {
+	preserveCwd(t)
+	a := testAppWithTwoTabs(t)
+	closingID := a.tabs[a.active].id
+
+	newM, _ := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
+	a2 := newM.(app)
+	if len(a2.tabs) != 1 {
+		t.Fatalf("ctrl+d with multiple tabs should close the active tab; got %d tabs", len(a2.tabs))
+	}
+	if a2.tabs[0].id == closingID {
+		t.Fatalf("ctrl+d should have removed tab id %d", closingID)
+	}
+}
+
+func TestApp_CtrlDQuitsOnLastTab(t *testing.T) {
+	first := newTestModel(t, newFakeProvider())
+	a := app{
+		tabs:   []*model{&first},
+		active: 0,
+		nextID: 2,
+		width:  first.width,
+		height: first.height,
+	}
+
+	_, cmd := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: 'd'})
+	if cmd == nil {
+		t.Fatal("ctrl+d on last tab should return tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+d on last tab should return tea.QuitMsg, got %T", cmd())
+	}
+}
+
+func TestApp_CtrlDQuitAcceptsControlCodeShape(t *testing.T) {
+	first := newTestModel(t, newFakeProvider())
+	a := app{
+		tabs:   []*model{&first},
+		active: 0,
+		nextID: 2,
+		width:  first.width,
+		height: first.height,
+	}
+
+	_, cmd := a.Update(tea.KeyPressMsg{Code: 0x04})
+	if cmd == nil {
+		t.Fatal("ctrl+d control-code shape should return tea.Quit")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+d control-code shape should return tea.QuitMsg, got %T", cmd())
+	}
+}
+
 func TestApp_CtrlNOpensNewTab(t *testing.T) {
 	cases := []struct {
 		name string

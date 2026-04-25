@@ -299,23 +299,31 @@ Enter handling.
 
 ---
 
-## 10. Ctrl+D quits the whole app
+## 10. Layered Ctrl+D
 
-**Purpose.** Match Codex CLI's `Ctrl+D` behavior: quit the app immediately
-instead of closing only the active tab.
+**Purpose.** Make `Ctrl+D` act like a progressive "back out" key: leave shell
+mode first, then close the active tab if there is more than one, and only quit
+the whole app on the last tab. Avoids accidentally killing every tab when the
+user just meant to exit shell mode.
 
 **Behavior details worth preserving.**
 - The app wrapper intercepts `Ctrl+D` before dispatching to the active tab.
-- `Ctrl+D` matching accepts both Bubble Tea v2 forms: `ModCtrl + 'd'`,
+- `Ctrl+D` matching accepts all Bubble Tea v2 forms: `ModCtrl + 'd'`,
   `msg.String()`/`msg.Keystroke()` equal to `ctrl+d`, and the raw control-code
   shape (`0x04`).
-- Quit drains pending replies, kills provider and shell subprocesses, and stops
-  each tab's MCP bridge before returning `tea.Quit`.
+- Order of operations in `app.handleCtrlD`:
+  1. If the active tab is in shell mode, call `exitShellMode()` on it and
+     return; no tab is closed and the app does not quit.
+  2. Otherwise, if more than one tab is open, close the active tab via
+     `closeTab(active.id)` so neighbours stay alive.
+  3. Otherwise, fall through to `quit`, which drains pending replies, kills
+     provider and shell subprocesses, and stops each tab's MCP bridge before
+     returning `tea.Quit`.
 - `Ctrl+C` twice on an empty idle prompt remains the tab-close path.
 
 **Key files.**
 - `util.go` (`isCtrlKey`)
-- `tabs.go` (`app.Update`, `app.quit`)
+- `tabs.go` (`app.Update`, `app.handleCtrlD`, `app.quit`)
 - `tabs_test.go`
 - `README.md`
 
@@ -326,6 +334,7 @@ instead of closing only the active tab.
 
 **Rebase risk.** Low to medium. This lives in the app-level key dispatcher;
 re-check if upstream changes tab lifecycle, quit handling, or cleanup paths.
+If `exitShellMode` moves or changes signature, update `handleCtrlD` accordingly.
 
 ---
 

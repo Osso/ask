@@ -111,6 +111,9 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.Mod == tea.ModCtrl && m.Code == 'z' {
 			return a.suspendApp()
 		}
+		if isCtrlKey(m, 'd') {
+			return a.handleCtrlD()
+		}
 		if isCtrlKey(m, 'n') {
 			return a.openTab()
 		}
@@ -154,6 +157,32 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// other broadcast candidates: let every tab filter by its own proc.
 		return a.broadcast(msg)
 	}
+}
+
+// handleCtrlD layers Ctrl+D: exit shell mode if active, else close the
+// current tab if there's more than one, else quit the app.
+func (a app) handleCtrlD() (tea.Model, tea.Cmd) {
+	active := a.activeTab()
+	if active.shellMode {
+		*a.tabs[a.active] = active.exitShellMode()
+		return a, nil
+	}
+	if len(a.tabs) > 1 {
+		return a.closeTab(active.id)
+	}
+	return a.quit()
+}
+
+func (a app) quit() (tea.Model, tea.Cmd) {
+	for _, t := range a.tabs {
+		t.drainPendingReplies()
+		t.killProc()
+		t.killShellProc()
+		if t.mcpBridge != nil {
+			t.mcpBridge.stop()
+		}
+	}
+	return a, tea.Quit
 }
 
 func (a app) View() tea.View {
