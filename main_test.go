@@ -85,11 +85,104 @@ func TestPrintHelp_MentionsKeyCommands(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf)
 	out := buf.String()
-	for _, want := range []string{"ask resume", "--help", "vs-"} {
+	for _, want := range []string{"ask resume", "--help", "vs-", "--simulate-approval"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing %q\n%s", want, out)
 		}
 	}
+}
+
+func TestParseSimulateApprovalFlag(t *testing.T) {
+	cases := []struct {
+		name        string
+		args        []string
+		wantOn      bool
+		wantTool    string
+		wantRest    []string
+	}{
+		{
+			name:     "absent",
+			args:     []string{"resume", "vs-abc"},
+			wantOn:   false,
+			wantTool: "Bash",
+			wantRest: []string{"resume", "vs-abc"},
+		},
+		{
+			name:     "bare flag defaults to Bash",
+			args:     []string{"--simulate-approval"},
+			wantOn:   true,
+			wantTool: "Bash",
+			wantRest: []string{},
+		},
+		{
+			name:     "flag with tool",
+			args:     []string{"--simulate-approval=Edit"},
+			wantOn:   true,
+			wantTool: "Edit",
+			wantRest: []string{},
+		},
+		{
+			name:     "flag mixed with other args is stripped",
+			args:     []string{"resume", "vs-1", "--simulate-approval=WebFetch"},
+			wantOn:   true,
+			wantTool: "WebFetch",
+			wantRest: []string{"resume", "vs-1"},
+		},
+		{
+			name:     "empty value falls back to default",
+			args:     []string{"--simulate-approval="},
+			wantOn:   true,
+			wantTool: "Bash",
+			wantRest: []string{},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotOn, gotTool, gotRest := parseSimulateApprovalFlag(tc.args)
+			if gotOn != tc.wantOn {
+				t.Errorf("on=%v want %v", gotOn, tc.wantOn)
+			}
+			if gotTool != tc.wantTool {
+				t.Errorf("tool=%q want %q", gotTool, tc.wantTool)
+			}
+			if !equalStrSlice(gotRest, tc.wantRest) {
+				t.Errorf("rest=%v want %v", gotRest, tc.wantRest)
+			}
+		})
+	}
+}
+
+func TestSimulatedApprovalInput_TargetsKnownTools(t *testing.T) {
+	cases := map[string]string{
+		"Bash":     "command",
+		"Edit":     "file_path",
+		"Read":     "file_path",
+		"Glob":     "pattern",
+		"WebFetch": "url",
+	}
+	for tool, key := range cases {
+		t.Run(tool, func(t *testing.T) {
+			in := simulatedApprovalInput(tool)
+			if _, ok := in[key]; !ok {
+				t.Errorf("simulated input for %q missing key %q: %#v", tool, key, in)
+			}
+		})
+	}
+	if got := simulatedApprovalInput("Mystery"); len(got) != 0 {
+		t.Errorf("unknown tool should produce empty map, got %#v", got)
+	}
+}
+
+func equalStrSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Closing the last tab must arm the quitting flag with the active

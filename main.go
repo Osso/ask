@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -142,10 +143,74 @@ func printHelp(w io.Writer) {
                      the TUI already attached to it
   ask --help         show this help
 
+Debug:
+  --simulate-approval[=<tool>]   open the approval modal at startup with a
+                                 synthetic <tool> request (default: Bash).
+                                 Exercises the in-app modal UI without
+                                 spawning claude.
+
 Virtual session ids look like vs-<hex> and are listed by /resume inside
 the TUI. Quitting ask prints the active tab's id so it can be passed to
 `+"`"+`ask resume`+"`"+` later.
 `)
+}
+
+// parseSimulateApprovalFlag scans args for `--simulate-approval` /
+// `--simulate-approval=<tool>` and returns whether it was present, the
+// tool name (defaulting to "Bash"), and the remaining args with the flag
+// stripped. Pure helper so the parsing path is unit-testable.
+func parseSimulateApprovalFlag(args []string) (bool, string, []string) {
+	enabled := false
+	tool := "Bash"
+	rest := make([]string, 0, len(args))
+	for _, a := range args {
+		switch {
+		case a == "--simulate-approval":
+			enabled = true
+		case strings.HasPrefix(a, "--simulate-approval="):
+			enabled = true
+			if v := strings.TrimPrefix(a, "--simulate-approval="); v != "" {
+				tool = v
+			}
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return enabled, tool, rest
+}
+
+// injectSimulatedApproval fires a synthetic approvalRequestMsg into the
+// running tea.Program so the in-app approval modal opens at startup. The
+// reply channel is buffered (size 1) and unread — the modal's send on
+// answer is non-blocking, so leaving it dangling is intentional.
+func injectSimulatedApproval(p *tea.Program, tabID int, tool string) {
+	time.Sleep(150 * time.Millisecond)
+	p.Send(approvalRequestMsg{
+		tabID:     tabID,
+		toolName:  tool,
+		input:     simulatedApprovalInput(tool),
+		toolUseID: "simulated-approval",
+		reply:     make(chan approvalReply, 1),
+	})
+}
+
+// simulatedApprovalInput returns a tool-shaped input map so the modal's
+// summary line has something meaningful to render.
+func simulatedApprovalInput(tool string) map[string]any {
+	switch tool {
+	case "Bash":
+		return map[string]any{"command": "ls /tmp"}
+	case "Edit", "Write", "MultiEdit", "NotebookEdit", "Read":
+		return map[string]any{"file_path": "/tmp/simulated-approval.txt"}
+	case "Glob", "Grep":
+		return map[string]any{"pattern": "**/*.go"}
+	case "WebFetch":
+		return map[string]any{"url": "https://example.com"}
+	case "WebSearch":
+		return map[string]any{"query": "simulated query"}
+	default:
+		return map[string]any{}
+	}
 }
 
 // resumeLookup resolves vsID against ~/.config/ask/sessions.json and
@@ -182,20 +247,22 @@ func main() {
 		}
 		return
 	}
+	simulateApproval, simulateApprovalTool, args := parseSimulateApprovalFlag(os.Args[1:])
+	osArgs := append([]string{os.Args[0]}, args...)
 	var startupResumeVID string
-	if len(os.Args) >= 2 {
-		switch os.Args[1] {
+	if len(osArgs) >= 2 {
+		switch osArgs[1] {
 		case "--help", "-h", "help":
 			printHelp(os.Stdout)
 			return
 		case "resume":
-			if len(os.Args) < 3 {
+			if len(osArgs) < 3 {
 				fmt.Fprintln(os.Stderr, "ask resume: missing virtual session id")
 				fmt.Fprintln(os.Stderr)
 				printHelp(os.Stderr)
 				os.Exit(2)
 			}
-			vid, ws, err := resumeLookup(os.Args[2])
+			vid, ws, err := resumeLookup(osArgs[2])
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "ask resume:", err)
 				os.Exit(1)
@@ -229,6 +296,9 @@ func main() {
 	a := newApp(first)
 	p := tea.NewProgram(a, tea.WithFPS(120))
 	setTeaProgram(p)
+	if simulateApproval {
+		go injectSimulatedApproval(p, first.id, simulateApprovalTool)
+	}
 	final, err := p.Run()
 	if fa, ok := final.(app); ok {
 		fa.shutdown()
