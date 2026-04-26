@@ -12,6 +12,8 @@ and patches that have intentionally been removed from the stack.
 Current patch stack:
 
 ```text
+734f5d5 main: add CLI option validation, reject unknown flags/subcommands
+bd2ca81 Add --simulate-approval flag to exercise the approval modal at startup
 3419906 Show Codex hook output
 05e132f Support run-plan for Claude provider
 3c92873 Preserve Claude stop hook in ask
@@ -556,6 +558,87 @@ swallowing the event.
 schema. If upstream adds first-class hook rendering, prefer dropping this
 patch over carrying a parallel implementation. Watch for entry-kind or
 status-string renames that would silently disable the error styling.
+
+---
+
+## 16. Simulated approval flag
+
+**Purpose.** Provide a developer-facing CLI flag that fires a synthetic
+`approvalRequestMsg` directly into the running tea program at startup so the
+approval modal UI can be exercised without spawning a provider subprocess or
+an MCP round-trip.
+
+**Behavior details worth preserving.**
+- `--simulate-approval` (no value) defaults to `Bash`; `--simulate-approval=<tool>`
+  picks an arbitrary tool name. `parseSimulateApprovalFlag` strips the flag from
+  argv before the rest of the CLI parser sees it, so the flag does not interfere
+  with `resume`/`help` parsing.
+- After the tea.Program is constructed, `injectSimulatedApproval` waits ~150ms
+  (so the program is in its main loop) and then calls `p.Send(approvalRequestMsg{...})`
+  with a buffered reply channel and a `simulated-approval` tool-use id.
+- `simulatedApprovalInput` produces a tool-shaped argument map for known tool
+  names (Bash command, Edit/Write file_path, Glob pattern, WebFetch url, etc.)
+  so the modal renders representative content for each tool.
+- The flag is documented in the help text printed by `printHelp`.
+
+**Key files.**
+- `main.go` (`parseSimulateApprovalFlag`, `injectSimulatedApproval`,
+  `simulatedApprovalInput`, `printHelp`)
+- `main_test.go` (`TestParseSimulateApprovalFlag`,
+  `TestSimulatedApprovalInput_TargetsKnownTools`,
+  `TestPrintHelp_MentionsKeyCommands`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'SimulateApproval|SimulatedApprovalInput|PrintHelp'`
+- `go test ./...`
+
+**Rebase risk.** Low. The injection path depends on the `approvalRequestMsg`
+shape and `tea.Program.Send`. If upstream renames the approval message type or
+moves the tab/program lifecycle, update `injectSimulatedApproval` accordingly.
+
+---
+
+## 17. CLI option validation
+
+**Purpose.** Reject unknown CLI flags and subcommands at startup with an error
+message and the help text, instead of silently launching the TUI as if the user
+had passed nothing. Earlier behavior swallowed typos (`ask --frobnicate`,
+`ask banana`) without warning.
+
+**Behavior details worth preserving.**
+- `parseCLICommand(args []string) (cliCommand, error)` is the single entry
+  point. It returns `Kind` of `"help"`, `"resume"`, or `"run"`, plus a `VSID`
+  for resume.
+- `--help`, `-h`, and bare `help` all map to `Kind: "help"`. Any extra
+  arguments after a help token are an error.
+- `resume` requires exactly one argument (the virtual session id); zero or
+  more than one trailing arguments are an error.
+- Any token starting with `-` that is not recognized produces
+  `unknown option: <token>`.
+- Any unrecognized leading positional argument produces
+  `unknown argument: <token>`.
+- `main` writes the error to stderr followed by the help text and exits with
+  status 2 on validation failure.
+- `parseSimulateApprovalFlag` runs before `parseCLICommand`, so
+  `--simulate-approval[=<tool>]` is consumed without producing an
+  `unknown option` error.
+
+**Key files.**
+- `main.go` (`cliCommand`, `parseCLICommand`, `main` dispatch)
+- `main_test.go` (`TestParseCLICommand` covering: no args, empty slice, all
+  three help forms, resume with vid, resume missing vid, resume too many args,
+  help with extra arg, unknown long flag, unknown short flag, unknown
+  subcommand)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'ParseCLICommand|PrintHelp'`
+- `go test ./...`
+
+**Rebase risk.** Low to medium. If upstream adds a new subcommand or top-level
+flag, it must be wired through `parseCLICommand` (and through
+`parseSimulateApprovalFlag` if it shares the `--foo[=bar]` shape) or it will
+be rejected as unknown. Touching this parser without a corresponding test
+update will silently allow regressions.
 
 ---
 
