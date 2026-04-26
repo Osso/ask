@@ -22,6 +22,18 @@ type app struct {
 	// "ask backgrounded — type `fg` …" before the prompt comes back.
 	// tea.ResumeMsg clears it; the next render re-enters altscreen.
 	suspending bool
+
+	// quitting flips on for the single render between the last tab
+	// closing and the QuitMsg that tea.Quit produces. While true, View
+	// renders an inline (non-altscreen) "last session: <vsID>" line so
+	// the id ends up in the host shell's scrollback after altscreen is
+	// torn down — printing from main after p.Run() returns is too late
+	// because the shell prompt redraws over wherever altscreen left the
+	// cursor. quittingVID is captured at close time from the last tab's
+	// virtualSessionID; an empty VID skips the quitting flag entirely so
+	// users who never started a session don't see a stray banner.
+	quitting    bool
+	quittingVID string
 }
 
 // newApp wraps the first tab in the app struct. Config is deliberately
@@ -149,6 +161,12 @@ func (a app) View() tea.View {
 		// Render inline (no altscreen) so the message survives in the
 		// shell's scrollback after SIGTSTP releases the terminal.
 		return tea.View{Content: "ask backgrounded — type `fg` to bring it back\n"}
+	}
+	if a.quitting {
+		// Same trick as suspending: AltScreen=false on the last frame
+		// before QuitMsg fires, so cursed_renderer.close exits altscreen
+		// and the inline content lands in the host terminal scrollback.
+		return tea.View{Content: "last session: " + a.quittingVID + "\n"}
 	}
 	v := a.activeTab().View()
 	if len(a.tabs) <= 1 {
@@ -328,6 +346,14 @@ func (a app) closeTab(tabID int) (tea.Model, tea.Cmd) {
 		t.mcpBridge.stop()
 	}
 	if len(a.tabs) == 1 {
+		// Capture the active tab's vsID so the next View can print
+		// "last session: …" inline before tea.Quit tears the altscreen
+		// down. Empty vsID = nothing to print, so don't even arm the
+		// flag — saves a redundant render flicker.
+		if t.virtualSessionID != "" {
+			a.quitting = true
+			a.quittingVID = t.virtualSessionID
+		}
 		return a, tea.Quit
 	}
 	a.tabs = append(a.tabs[:idx], a.tabs[idx+1:]...)

@@ -151,35 +151,31 @@ the TUI. Quitting ask prints the active tab's id so it can be passed to
 `)
 }
 
-// resumeStartup looks vsID up in ~/.config/ask/sessions.json, chdirs
-// to the recorded workspace, and returns the validated id so newTab
-// can pre-seed model.virtualSessionID. Init then dispatches a
-// startupResumeMsg that drives the same flow the picker uses, so all
-// the cross-provider translation / native-id lookup logic stays in
-// resumeVirtualSession.
-func resumeStartup(vsID string) (string, error) {
+// resumeLookup resolves vsID against ~/.config/ask/sessions.json and
+// returns the matching VS id and the recorded workspace path. Pure: no
+// side effects — main is responsible for the os.Chdir, which keeps
+// tests self-contained (chdirs from a test process pollute every test
+// that follows because the cleanup ordering against t.TempDir teardown
+// is fragile when the cwd points inside a doomed tempdir).
+func resumeLookup(vsID string) (id, workspace string, err error) {
 	if vsID == "" {
-		return "", fmt.Errorf("missing virtual session id")
+		return "", "", fmt.Errorf("missing virtual session id")
 	}
 	store, err := loadVirtualSessions()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	vs := store.findByID(vsID)
 	if vs == nil {
-		return "", fmt.Errorf("virtual session %q not found", vsID)
+		return "", "", fmt.Errorf("virtual session %q not found", vsID)
 	}
-	ws := vs.Workspace
-	if ws == "" {
-		return "", fmt.Errorf("virtual session %q has no workspace recorded", vsID)
+	if vs.Workspace == "" {
+		return "", "", fmt.Errorf("virtual session %q has no workspace recorded", vsID)
 	}
-	if _, err := os.Stat(ws); err != nil {
-		return "", fmt.Errorf("workspace %s: %w", ws, err)
+	if _, err := os.Stat(vs.Workspace); err != nil {
+		return "", "", fmt.Errorf("workspace %s: %w", vs.Workspace, err)
 	}
-	if err := os.Chdir(ws); err != nil {
-		return "", fmt.Errorf("chdir %s: %w", ws, err)
-	}
-	return vs.ID, nil
+	return vs.ID, vs.Workspace, nil
 }
 
 func main() {
@@ -202,9 +198,13 @@ func main() {
 				printHelp(os.Stderr)
 				os.Exit(2)
 			}
-			vid, err := resumeStartup(os.Args[2])
+			vid, ws, err := resumeLookup(os.Args[2])
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "ask resume:", err)
+				os.Exit(1)
+			}
+			if err := os.Chdir(ws); err != nil {
+				fmt.Fprintln(os.Stderr, "ask resume: chdir", ws+":", err)
 				os.Exit(1)
 			}
 			startupResumeVID = vid
@@ -235,28 +235,10 @@ func main() {
 	final, err := p.Run()
 	if fa, ok := final.(app); ok {
 		fa.shutdown()
-		printLastSession(os.Stdout, fa)
 	}
 	pruneWorktrees()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ask:", err)
 		os.Exit(1)
 	}
-}
-
-// printLastSession writes one `last session: <vid>` line for the
-// active tab when it has a virtual session id. Kept as a separate
-// function so tests can verify the output without spinning up a real
-// tea.Program — and so multi-tab behaviour stays one-line: the user
-// can rerun ask on the active tab's id; sibling tabs are still
-// listed under /resume in the new TUI.
-func printLastSession(w io.Writer, a app) {
-	if len(a.tabs) == 0 {
-		return
-	}
-	t := a.activeTab()
-	if t == nil || t.virtualSessionID == "" {
-		return
-	}
-	fmt.Fprintf(w, "last session: %s\n", t.virtualSessionID)
 }

@@ -2,14 +2,15 @@ package main
 
 import (
 	"bytes"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	tea "charm.land/bubbletea/v2"
 )
 
-func TestResumeStartup_FindsVSAndChdirs(t *testing.T) {
+func TestResumeLookup_FindsVSAndReturnsWorkspace(t *testing.T) {
 	isolateHome(t)
 	ws := t.TempDir()
 	store := &virtualSessionStore{Version: 1}
@@ -18,38 +19,31 @@ func TestResumeStartup_FindsVSAndChdirs(t *testing.T) {
 	if err := saveVirtualSessions(store); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	// Move out of ws so chdir can be observed.
-	t.Chdir(t.TempDir())
 
-	got, err := resumeStartup(vsID)
+	gotID, gotWS, err := resumeLookup(vsID)
 	if err != nil {
-		t.Fatalf("resumeStartup: %v", err)
+		t.Fatalf("resumeLookup: %v", err)
 	}
-	if got != vsID {
-		t.Errorf("returned id=%q want %q", got, vsID)
+	if gotID != vsID {
+		t.Errorf("returned id=%q want %q", gotID, vsID)
 	}
-	cur, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	// macOS may resolve /var → /private/var; compare with EvalSymlinks.
 	wantAbs, _ := filepath.EvalSymlinks(ws)
-	gotAbs, _ := filepath.EvalSymlinks(cur)
+	gotAbs, _ := filepath.EvalSymlinks(gotWS)
 	if gotAbs != wantAbs {
-		t.Errorf("cwd=%q want %q", gotAbs, wantAbs)
+		t.Errorf("returned workspace=%q want %q", gotAbs, wantAbs)
 	}
 }
 
-func TestResumeStartup_EmptyIDErrors(t *testing.T) {
+func TestResumeLookup_EmptyIDErrors(t *testing.T) {
 	isolateHome(t)
-	if _, err := resumeStartup(""); err == nil {
+	if _, _, err := resumeLookup(""); err == nil {
 		t.Fatal("empty id should error")
 	}
 }
 
-func TestResumeStartup_UnknownIDErrors(t *testing.T) {
+func TestResumeLookup_UnknownIDErrors(t *testing.T) {
 	isolateHome(t)
-	_, err := resumeStartup("vs-does-not-exist")
+	_, _, err := resumeLookup("vs-does-not-exist")
 	if err == nil {
 		t.Fatal("unknown vsID should error")
 	}
@@ -58,7 +52,7 @@ func TestResumeStartup_UnknownIDErrors(t *testing.T) {
 	}
 }
 
-func TestResumeStartup_MissingWorkspaceErrors(t *testing.T) {
+func TestResumeLookup_MissingWorkspaceErrors(t *testing.T) {
 	isolateHome(t)
 	missing := filepath.Join(t.TempDir(), "gone")
 	store := &virtualSessionStore{Version: 1}
@@ -67,13 +61,13 @@ func TestResumeStartup_MissingWorkspaceErrors(t *testing.T) {
 	if err := saveVirtualSessions(store); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	_, err := resumeStartup(vsID)
+	_, _, err := resumeLookup(vsID)
 	if err == nil {
 		t.Fatal("missing workspace should error")
 	}
 }
 
-func TestResumeStartup_EmptyWorkspaceErrors(t *testing.T) {
+func TestResumeLookup_EmptyWorkspaceErrors(t *testing.T) {
 	isolateHome(t)
 	store := &virtualSessionStore{Version: 1}
 	vsID := upsertVirtualSession(store, "", "", "claude", "native-1", "",
@@ -81,7 +75,7 @@ func TestResumeStartup_EmptyWorkspaceErrors(t *testing.T) {
 	if err := saveVirtualSessions(store); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	_, err := resumeStartup(vsID)
+	_, _, err := resumeLookup(vsID)
 	if err == nil {
 		t.Fatal("empty workspace should error")
 	}
@@ -98,43 +92,92 @@ func TestPrintHelp_MentionsKeyCommands(t *testing.T) {
 	}
 }
 
-func TestPrintLastSession_PrintsActiveTabVID(t *testing.T) {
-	first := newTabModelStub(t, 1, "vs-active")
-	other := newTabModelStub(t, 2, "vs-other")
-	a := app{tabs: []*model{first, other}, active: 0}
-	var buf bytes.Buffer
-	printLastSession(&buf, a)
-	got := buf.String()
-	if !strings.Contains(got, "last session: vs-active") {
-		t.Errorf("expected active tab vsID in output, got %q", got)
+// Closing the last tab must arm the quitting flag with the active
+// tab's virtualSessionID; the next View renders inline so the line
+// lands in the host shell's scrollback after altscreen tears down.
+// Mirrors how Ctrl+Z's suspending flag works.
+func TestCloseLastTab_ArmsQuittingWithVID(t *testing.T) {
+	tab := newTabModelStub(t, 1, "vs-active")
+	a := app{tabs: []*model{tab}, active: 0}
+
+	newA, cmd := a.closeTab(1)
+	a2, ok := newA.(app)
+	if !ok {
+		t.Fatalf("closeTab returned %T, want app", newA)
 	}
-	if strings.Contains(got, "vs-other") {
-		t.Errorf("only the active tab's vsID should be printed, got %q", got)
+	if cmd == nil {
+		t.Fatal("closing the last tab must return a quit cmd")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Errorf("cmd should yield tea.QuitMsg{}, got %T %+v", msg, msg)
+	}
+	if !a2.quitting {
+		t.Error("a.quitting must be true between last-tab-close and QuitMsg")
+	}
+	if a2.quittingVID != "vs-active" {
+		t.Errorf("quittingVID=%q want vs-active", a2.quittingVID)
+	}
+
+	// View while quitting must render *inline* (no altscreen) so the
+	// content survives the cursed_renderer.close → EraseScreenBelow
+	// teardown into the host shell's scrollback.
+	view := a2.View()
+	if view.AltScreen {
+		t.Error("quitting View must have AltScreen=false")
+	}
+	if !strings.Contains(view.Content, "last session: vs-active") {
+		t.Errorf("quitting View content=%q must announce the vsID", view.Content)
 	}
 }
 
-func TestPrintLastSession_QuietWhenNoVID(t *testing.T) {
+func TestCloseLastTab_NoVIDLeavesQuittingDisarmed(t *testing.T) {
 	tab := newTabModelStub(t, 1, "")
 	a := app{tabs: []*model{tab}, active: 0}
-	var buf bytes.Buffer
-	printLastSession(&buf, a)
-	if buf.Len() != 0 {
-		t.Errorf("no vsID → no output, got %q", buf.String())
+
+	newA, cmd := a.closeTab(1)
+	a2 := newA.(app)
+	if cmd == nil {
+		t.Fatal("closing the last tab must still return tea.Quit")
+	}
+	if a2.quitting {
+		t.Error("no vsID → don't flicker the quitting render path")
+	}
+	if a2.quittingVID != "" {
+		t.Errorf("quittingVID should stay empty, got %q", a2.quittingVID)
+	}
+	view := a2.View()
+	if !view.AltScreen {
+		t.Error("View without quitting must keep AltScreen=true (normal render)")
 	}
 }
 
-func TestPrintLastSession_QuietWhenNoTabs(t *testing.T) {
-	a := app{}
-	var buf bytes.Buffer
-	printLastSession(&buf, a)
-	if buf.Len() != 0 {
-		t.Errorf("no tabs → no output, got %q", buf.String())
+// Closing a non-last tab must not arm the quit flag; the program
+// stays alive on the surviving tabs.
+func TestCloseTab_NonLastTabDoesNotArmQuitting(t *testing.T) {
+	// closeTab(non-last) follows the new active tab's cwd via os.Chdir.
+	// Pin our own cwd via t.Chdir so the cleanup restores it — the
+	// production chdir is fine for a real session but pollutes every
+	// later test in the same process.
+	t.Chdir(t.TempDir())
+
+	first := newTabModelStub(t, 1, "vs-first")
+	second := newTabModelStub(t, 2, "vs-second")
+	a := app{tabs: []*model{first, second}, active: 0, width: 100, height: 30}
+
+	newA, _ := a.closeTab(1)
+	a2 := newA.(app)
+	if a2.quitting {
+		t.Error("closing one of two tabs must not arm quitting")
+	}
+	if a2.quittingVID != "" {
+		t.Errorf("quittingVID should stay empty, got %q", a2.quittingVID)
 	}
 }
 
-// newTabModelStub returns a minimal *model just rich enough for
-// printLastSession to read its virtualSessionID; full model wiring
-// (tea program, MCP bridge) is unnecessary for the printer test.
+// newTabModelStub returns a minimal *model just rich enough for the
+// app-level close/View tests to read its virtualSessionID and run
+// killProc/drainPendingReplies as no-ops; full model wiring
+// (tea program, MCP bridge) is unnecessary at this layer.
 func newTabModelStub(t *testing.T, id int, vid string) *model {
 	t.Helper()
 	p := newFakeProvider()
