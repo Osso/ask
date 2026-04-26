@@ -192,8 +192,9 @@ func TestCodexRunPlanPromptUsesNextItemAndPlanFile(t *testing.T) {
 	if !ok {
 		t.Fatal("codexRunPlanPrompt() did not find pending item")
 	}
-	if envValue != "TODO.md" {
-		t.Fatalf("envValue=%q want TODO.md", envValue)
+	wantEnvValue := filepath.Join(dir, "TODO.md")
+	if envValue != wantEnvValue {
+		t.Fatalf("envValue=%q want %q", envValue, wantEnvValue)
 	}
 	for _, want := range []string{
 		"Work on the next task from TODO.md:",
@@ -216,8 +217,9 @@ func TestCodexRunPlanPromptDefaultsToPlanMD(t *testing.T) {
 	if !ok {
 		t.Fatal("codexRunPlanPrompt() did not find pending item")
 	}
-	if envValue != "1" {
-		t.Fatalf("envValue=%q want 1", envValue)
+	wantEnvValue := filepath.Join(dir, "PLAN.md")
+	if envValue != wantEnvValue {
+		t.Fatalf("envValue=%q want %q", envValue, wantEnvValue)
 	}
 	if !strings.Contains(prompt, "Work on the next task from PLAN.md:") {
 		t.Fatalf("prompt should name PLAN.md:\n%s", prompt)

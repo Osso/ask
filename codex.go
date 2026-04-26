@@ -1036,11 +1036,10 @@ func codexFindNextPlanItem(planPath string) (string, bool) {
 func codexRunPlanPrompt(cwd, planFile string) (prompt, envValue string, ok bool) {
 	if planFile == "" {
 		planFile = "PLAN.md"
-		envValue = "1"
-	} else {
-		envValue = planFile
 	}
-	item, ok := codexFindNextPlanItem(filepath.Join(cwd, planFile))
+	planPath := filepath.Join(cwd, planFile)
+	envValue = planPath
+	item, ok := codexFindNextPlanItem(planPath)
 	if !ok {
 		return "", envValue, false
 	}

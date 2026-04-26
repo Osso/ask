@@ -1340,9 +1340,7 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m = m.startConfigModal()
 		return m, nil
 	case "/run-plan":
-		if m.provider.ID() == "codex" {
-			return m.handleCodexRunPlan(line)
-		}
+		return m.handleRunPlan(line)
 	case "/compact":
 		if m.provider.ID() == "codex" {
 			return m.handleCodexCompact()
@@ -1358,7 +1356,7 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) handleCodexRunPlan(line string) (tea.Model, tea.Cmd) {
+func (m model) handleRunPlan(line string) (tea.Model, tea.Cmd) {
 	_, arg, _ := strings.Cut(line, " ")
 	planFile := strings.TrimSpace(arg)
 	prompt, envValue, ok := codexRunPlanPrompt(m.cwd, planFile)

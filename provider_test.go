@@ -113,7 +113,7 @@ func TestClaudeProvider_Metadata(t *testing.T) {
 	for _, s := range slashes {
 		names[s.name] = true
 	}
-	for _, want := range []string{"/resume", "/new", "/clear", "/model", "/effort"} {
+	for _, want := range []string{"/resume", "/new", "/clear", "/model", "/effort", "/run-plan"} {
 		if !names[want] {
 			t.Errorf("BaseSlashCommands missing %q", want)
 		}

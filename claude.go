@@ -56,6 +56,7 @@ func (claudeProvider) BaseSlashCommands() []slashCmd {
 		{"/clear", "start a new Claude session"},
 		{"/model", "select the Claude model"},
 		{"/effort", "select the Claude reasoning effort"},
+		{"/run-plan", "set PLAN_FILE and work on next plan item (optional: /run-plan <file>)"},
 	}
 }
 
