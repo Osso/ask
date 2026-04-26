@@ -155,6 +155,44 @@ the TUI. Quitting ask prints the active tab's id so it can be passed to
 `)
 }
 
+// cliCommand is the post-parse intent for a single ask invocation. main()
+// dispatches on Kind: "help" prints usage and exits 0; "resume" runs the
+// resume flow with VSID; "run" starts the TUI in the current cwd.
+type cliCommand struct {
+	Kind string
+	VSID string
+}
+
+// parseCLICommand validates the post-flag-strip arg vector and rejects
+// unknown subcommands or stray flags up-front so users learn about typos
+// before the TUI swallows the screen. Pure: no os.Args, no os.Exit, no
+// chdir — main() owns side effects.
+func parseCLICommand(args []string) (cliCommand, error) {
+	if len(args) == 0 {
+		return cliCommand{Kind: "run"}, nil
+	}
+	head := args[0]
+	switch head {
+	case "--help", "-h", "help":
+		if len(args) > 1 {
+			return cliCommand{}, fmt.Errorf("unexpected arguments after %q: %v", head, args[1:])
+		}
+		return cliCommand{Kind: "help"}, nil
+	case "resume":
+		if len(args) < 2 {
+			return cliCommand{}, fmt.Errorf("resume: missing virtual session id")
+		}
+		if len(args) > 2 {
+			return cliCommand{}, fmt.Errorf("resume: unexpected extra arguments: %v", args[2:])
+		}
+		return cliCommand{Kind: "resume", VSID: args[1]}, nil
+	}
+	if strings.HasPrefix(head, "-") {
+		return cliCommand{}, fmt.Errorf("unknown option: %s", head)
+	}
+	return cliCommand{}, fmt.Errorf("unknown argument: %s", head)
+}
+
 // parseSimulateApprovalFlag scans args for `--simulate-approval` /
 // `--simulate-approval=<tool>` and returns whether it was present, the
 // tool name (defaulting to "Bash"), and the remaining args with the flag
@@ -248,31 +286,29 @@ func main() {
 		return
 	}
 	simulateApproval, simulateApprovalTool, args := parseSimulateApprovalFlag(os.Args[1:])
-	osArgs := append([]string{os.Args[0]}, args...)
+	cmd, err := parseCLICommand(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ask:", err)
+		fmt.Fprintln(os.Stderr)
+		printHelp(os.Stderr)
+		os.Exit(2)
+	}
 	var startupResumeVID string
-	if len(osArgs) >= 2 {
-		switch osArgs[1] {
-		case "--help", "-h", "help":
-			printHelp(os.Stdout)
-			return
-		case "resume":
-			if len(osArgs) < 3 {
-				fmt.Fprintln(os.Stderr, "ask resume: missing virtual session id")
-				fmt.Fprintln(os.Stderr)
-				printHelp(os.Stderr)
-				os.Exit(2)
-			}
-			vid, ws, err := resumeLookup(osArgs[2])
-			if err != nil {
-				fmt.Fprintln(os.Stderr, "ask resume:", err)
-				os.Exit(1)
-			}
-			if err := os.Chdir(ws); err != nil {
-				fmt.Fprintln(os.Stderr, "ask resume: chdir", ws+":", err)
-				os.Exit(1)
-			}
-			startupResumeVID = vid
+	switch cmd.Kind {
+	case "help":
+		printHelp(os.Stdout)
+		return
+	case "resume":
+		vid, ws, err := resumeLookup(cmd.VSID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ask resume:", err)
+			os.Exit(1)
 		}
+		if err := os.Chdir(ws); err != nil {
+			fmt.Fprintln(os.Stderr, "ask resume: chdir", ws+":", err)
+			os.Exit(1)
+		}
+		startupResumeVID = vid
 	}
 	cfg, _ := loadConfig()
 	_ = saveConfig(cfg)

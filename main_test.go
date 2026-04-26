@@ -152,6 +152,76 @@ func TestParseSimulateApprovalFlag(t *testing.T) {
 	}
 }
 
+func TestParseCLICommand(t *testing.T) {
+	cases := []struct {
+		name    string
+		args    []string
+		want    cliCommand
+		wantErr string
+	}{
+		{name: "no args runs TUI", args: nil, want: cliCommand{Kind: "run"}},
+		{name: "empty slice runs TUI", args: []string{}, want: cliCommand{Kind: "run"}},
+		{name: "help long", args: []string{"--help"}, want: cliCommand{Kind: "help"}},
+		{name: "help short", args: []string{"-h"}, want: cliCommand{Kind: "help"}},
+		{name: "help word", args: []string{"help"}, want: cliCommand{Kind: "help"}},
+		{
+			name: "resume with vid",
+			args: []string{"resume", "vs-abc"},
+			want: cliCommand{Kind: "resume", VSID: "vs-abc"},
+		},
+		{
+			name:    "resume missing vid",
+			args:    []string{"resume"},
+			wantErr: "missing virtual session id",
+		},
+		{
+			name:    "resume too many args",
+			args:    []string{"resume", "vs-abc", "extra"},
+			wantErr: "unexpected extra arguments",
+		},
+		{
+			name:    "help with extra arg",
+			args:    []string{"--help", "junk"},
+			wantErr: "unexpected arguments",
+		},
+		{
+			name:    "unknown long flag",
+			args:    []string{"--frobnicate"},
+			wantErr: "unknown option: --frobnicate",
+		},
+		{
+			name:    "unknown short flag",
+			args:    []string{"-x"},
+			wantErr: "unknown option: -x",
+		},
+		{
+			name:    "unknown subcommand",
+			args:    []string{"banana"},
+			wantErr: "unknown argument: banana",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseCLICommand(tc.args)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("want error containing %q, got nil (cmd=%+v)", tc.wantErr, got)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err=%q want contains %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got=%+v want=%+v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSimulatedApprovalInput_TargetsKnownTools(t *testing.T) {
 	cases := map[string]string{
 		"Bash":     "command",
