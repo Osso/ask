@@ -12,19 +12,30 @@ and patches that have intentionally been removed from the stack.
 Current patch stack:
 
 ```text
-11c4d0e Normalize Bubble Tea key matching
-fa86de9 Make Ctrl-D quit ask
-3ffee0a Add provider switch command
-ed01956 Render tool outputs in stream and session replay
-322b43b themes: add ayu (mirage) palette
-8f114e3 claude: route permission prompts to claude-bash-hook-approval MCP
-cfd2dad deploy: local build+test+install script
-b187d8c mcp: enforce 1 MiB argument size limit on tool handlers
-1dbebdb worktree: fix TOCTOU in ensureWorktreeGitignore via Lstat+atomic rename
-60751bd shell: strip Anthropic credentials from shell subprocess env
-e57465c mcp: disable localhost bypass for DNS-rebinding protection
-tabs: rebind new-tab shortcut to Ctrl+N
-tool_output: reclassify rg/fdfind unknown actions as search
+3419906 Show Codex hook output
+05e132f Support run-plan for Claude provider
+3c92873 Preserve Claude stop hook in ask
+dbb7e43 tool_output: reclassify rg/fdfind unknown actions as search
+ae7b11d codex: render commandExecution as parsed action rows
+63399c7 tool_output: render call/result blocks with muted instead of dim
+65ff469 themes: bump ayu foreground brighter and muted darker
+c83f1d4 tabs: layer Ctrl+D so it backs out instead of force-quitting
+1933591 tabs: rebind new-tab to Ctrl+N and normalize Ctrl+arrow matching
+5af39f4 themes: soften ayu string highlights
+08c4dbf themes: use codex ayu yellow for highlights
+23cc740 Run selected slash completion on Enter
+b53906b Mirror Codex compact command
+30d2799 Mirror Codex run-plan command
+b878840 Normalize Bubble Tea key matching
+52ba41b Add provider switch command
+45e6f06 Render tool outputs in stream and session replay
+72671c8 themes: add ayu (mirage) palette
+c2bebc7 claude: route permission prompts to claude-bash-hook-approval MCP
+99c7f71 deploy: local build+test+install script
+27915bd mcp: enforce 1 MiB argument size limit on tool handlers
+200be4a worktree: fix TOCTOU in ensureWorktreeGitignore via Lstat+atomic rename
+f163dea shell: strip Anthropic credentials from shell subprocess env
+86b8675 mcp: disable localhost bypass for DNS-rebinding protection
 ```
 
 ---
@@ -232,21 +243,31 @@ change.
 
 ---
 
-## 8. Codex built-in command mirrors
+## 8. Built-in command mirrors (`/run-plan`, `/compact`)
 
-**Purpose.** Show and handle selected Codex built-in TUI commands inside ask.
+**Purpose.** Show and handle selected built-in TUI commands inside ask.
 Codex app-server exposes `skills/list`, but it does not expose a built-in slash
-command list, so ask mirrors the commands it needs locally.
+command list, and Claude has no slash command list at all, so ask mirrors the
+commands it needs locally. `/run-plan` works for both Codex and Claude;
+`/compact` is Codex-only.
 
 **Behavior details worth preserving.**
-- `/run-plan` appears in Codex's base slash-command list.
+- `/run-plan` appears in both `claudeProvider.BaseSlashCommands()` and
+  `codexProvider.BaseSlashCommands()`.
 - `/run-plan` reads `PLAN.md`; `/run-plan <file>` reads the supplied plan file.
-- The first unchecked `- [ ]` or `* [ ]` item is submitted as a generated Codex
-  prompt.
-- `PLAN_FILE=1` is set for the default plan and `PLAN_FILE=<file>` for a custom
-  plan, matching the Codex fork's hook contract.
+- The first unchecked `- [ ]` or `* [ ]` item is submitted as a generated
+  prompt that includes "Commit after completing this item. Check it off
+  (change `- [ ]` to `- [x]`). Do not delete existing items from <file>."
+- `PLAN_FILE` is set to the absolute path of the plan file (e.g.
+  `/home/osso/Repos/ask/PLAN.md`), not `1`. Matches the hook contract for
+  `claude-plan-hook` / Codex's stop hook so the hook can re-read the plan
+  without guessing the cwd.
 - When no pending item exists, ask reports `No pending tasks in <file>.` and
   does not start a provider turn.
+- If a provider process is already running, `handleRunPlan` calls
+  `m.killProc()` before `sendToProvider` so the new subprocess inherits the
+  freshly-set `PLAN_FILE` env var. Without this, the env update reaches the
+  parent only and the still-running child keeps the old value.
 - `/compact` appears in Codex's base slash-command list.
 - `/compact` requires an active Codex app-server thread and sends
   `thread/compact/start` with the current `threadId`.
@@ -254,20 +275,24 @@ command list, so ask mirrors the commands it needs locally.
   does not start a provider turn.
 
 **Key files.**
-- `codex.go` (`BaseSlashCommands`, `codexRunPlanPrompt`,
+- `claude.go` (`claudeProvider.BaseSlashCommands`)
+- `codex.go` (`codexProvider.BaseSlashCommands`, `codexRunPlanPrompt`,
   `codexFindNextPlanItem`, `codexStartCompaction`)
-- `update.go` (`handleCommand`, `handleCodexRunPlan`, `handleCodexCompact`)
+- `update.go` (`handleCommand`, `handleRunPlan`, `handleCodexCompact`)
 - `codex_skills_test.go`
+- `provider_test.go`
 - `update_test.go`
 
 **Tests to re-run after rebase.**
 - `go test ./...`
 - Focused:
-  `go test ./... -run 'CodexBaseSlashCommandsIncludes|CodexFindNextPlanItem|CodexRunPlanPrompt|HandleCommand_CodexRunPlan|HandleCommand_CodexCompact'`
+  `go test ./... -run 'ClaudeProvider_Metadata|CodexBaseSlashCommandsIncludes|CodexFindNextPlanItem|CodexRunPlanPrompt|HandleCommand_CodexRunPlan|HandleCommand_ClaudeRunPlan|HandleCommand_CodexCompact'`
 
 **Rebase risk.** Medium. If upstream Codex changes `/run-plan` wording,
 `PLAN_FILE` semantics, `/compact` dispatch, or app-server grows a built-in
-command API, update or remove ask's mirrors instead of letting behavior drift.
+command API, update or remove ask's mirrors instead of letting behavior
+drift. Watch for upstream re-introducing a Codex-only `/run-plan` guard in
+`handleCommand`; `handleRunPlan` is intentionally provider-agnostic.
 
 ---
 
@@ -280,10 +305,13 @@ command.
 **Behavior details worth preserving.**
 - Tab still accepts the highlighted slash command into the input without
   submitting it.
-- Enter promotes the highlighted slash completion to the submitted command line
-  before recording input history and dispatching.
-- Prefixes like `/comp` therefore dispatch `/compact` when `/compact` is the
-  highlighted completion.
+- Enter behavior depends on how many completions match:
+  - **Exactly one match** — Enter promotes that completion to the submitted
+    line and dispatches it directly (e.g. `/comp` ⇒ `/compact` runs without a
+    second Enter). Recorded into `inputHistory` as the resolved command.
+  - **Multiple matches with no exact hit** — Enter accepts the highlighted
+    entry into the input (same as Tab) without submitting; the user gets to
+    refine before the next Enter.
 
 **Key files.**
 - `update.go` (`KeyEnter` handling in `updateInput`)
@@ -296,7 +324,8 @@ command.
 
 **Rebase risk.** Medium. This sits in the shared input key dispatcher; re-check
 if upstream changes slash picker semantics, history recording, or path-picker
-Enter handling.
+Enter handling. Watch for upstream simplifying back to a single Tab-only
+accept path.
 
 ---
 
@@ -448,6 +477,85 @@ re-check after Codex app-server schema updates that may rename
 `commandActions` or change the `CommandAction` discriminator. Touches the
 shared `toolCallMsg` struct, so any upstream tool-call wiring change needs to
 preserve the `actions` field.
+
+---
+
+## 14. Claude Stop hook registration
+
+**Purpose.** Claude's `Stop` event fires when the assistant turn ends. Ask
+registers a Stop hook so an external binary (`claude-plan-hook`) can read
+`PLAN_FILE`, decide whether the next plan item is ready, and queue follow-up
+work without the user manually invoking `/run-plan` again.
+
+**Behavior details worth preserving.**
+- `claudeHookSettings` registers a `Stop` entry in the hooks JSON alongside
+  the existing `PreToolUse`, `SubagentStart`, and `SubagentStop` entries.
+- The `Stop` hook command points at `/home/osso/.cargo/bin/claude-plan-hook`
+  (absolute path, not a `_hook` subcommand). Other hooks still POST back to
+  the embedded ask bridge via `_hook <event> --port <mcpPort>`; Stop is the
+  only one that delegates to a separate binary.
+- The other registered hooks remain wired through `hookCmd(...)` so port
+  routing keeps working when the Stop binary is not installed.
+
+**Key files.**
+- `claude.go` (`claudeHookSettings`)
+- `claude_cli_test.go` (`TestClaudeHookSettings_RegistersSubagentHooks` —
+  asserts the Stop entry plus `claude-plan-hook` substring)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run ClaudeHookSettings`
+- `go test ./...`
+
+**Rebase risk.** Low to medium. The hook registration table is short and
+upstream rarely touches it, but if Claude renames the `Stop` event or the
+embedded bridge gains its own plan-aware hook, this delegation should be
+revisited rather than carried forward unchanged. The absolute path to
+`claude-plan-hook` is environment-specific and should stay matched to the
+local Cargo install path.
+
+---
+
+## 15. Codex hook output rendering
+
+**Purpose.** Codex emits `hook/completed` notifications for user-defined
+hooks (Stop, PreCompact, etc.). Show the hook's text entries in the
+transcript so the user can see why a hook blocked, what the next plan item
+is, or what Codex routed back from the hook script — instead of silently
+swallowing the event.
+
+**Behavior details worth preserving.**
+- `codexHookOutputMsg` extracts `params.run.entries[]` from a `hook/completed`
+  event. Each entry's `text` is trimmed; empty entries are skipped.
+- An entry kind of `error` or `stop` flips the rendered block to error style;
+  a run `status` of `failed`, `blocked`, or `stopped` does the same. This
+  matches the Codex client's own treatment of stop-hook output.
+- The rendered block uses the dedicated `renderHookOutputBlock` (header
+  `▸ <eventName> hook` plus indented text rows) — distinct from
+  `renderToolResultBlock` so the user can tell hooks apart from tool calls
+  in scrollback.
+- Hook output respects the same line-clamping (`clampToolOutput`) as tool
+  output but bypasses the `quietMode` / `toolOutputMode` gates: hook
+  feedback is treated as control-flow signal and always rendered, even when
+  tool output is muted (`TestUpdate_HookOutputMsgAlwaysRenders`).
+- Cross-tab safety: the update handler drops the message when
+  `msg.proc != m.proc`, matching the same guard used for `toolResultMsg`.
+
+**Key files.**
+- `codex.go` (`codexEventToMsgs` `hook/completed` case, `codexHookOutputMsg`)
+- `tool_output.go` (`renderHookOutputBlock`)
+- `types.go` (`hookOutputMsg`)
+- `update.go` (`hookOutputMsg` case in `Update`)
+- `codex_stream_test.go` (`TestCodexEventToMsgs_HookCompletedEmitsHookOutput`)
+- `update_test.go` (`TestUpdate_HookOutputMsgAlwaysRenders`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'HookCompleted|HookOutput'`
+- `go test ./...`
+
+**Rebase risk.** Medium. Tied to the Codex app-server `hook/completed`
+schema. If upstream adds first-class hook rendering, prefer dropping this
+patch over carrying a parallel implementation. Watch for entry-kind or
+status-string renames that would silently disable the error styling.
 
 ---
 
