@@ -138,6 +138,7 @@ func (m model) sendToProvider(line string) (tea.Model, tea.Cmd) {
 	nAtt := len(m.pending)
 	debugLog("sendToProvider provider=%s line=%q attachments=%d procNil=%v busy=%v sessionID=%q",
 		m.provider.ID(), line, nAtt, m.proc == nil, m.busy, m.sessionID)
+	(&m).clearSelection()
 	m.appendUser(userBarText(line, nAtt))
 	if invalid := validateAskCwd(m.cwd); invalid.Msg != "" {
 		m.pending = nil

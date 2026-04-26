@@ -42,6 +42,7 @@ const switcherCustomRowLabel = "Enter your own"
 // openProviderSwitch enters the quick switcher. Cursor starts on the
 // current provider; Level 0 is always where we enter.
 func (m model) openProviderSwitch() model {
+	(&m).clearSelection()
 	m.mode = modeProviderSwitch
 	m.providerSwitchLevel = 0
 	m.providerSwitchProvIdx = indexOfProvider(m.provider)

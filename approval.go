@@ -18,6 +18,7 @@ const (
 )
 
 func (m model) startApproval(msg approvalRequestMsg) model {
+	(&m).clearSelection()
 	m.mode = modeApproval
 	m.approvalTool = msg.toolName
 	m.approvalInput = msg.input

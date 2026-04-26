@@ -290,6 +290,24 @@ type model struct {
 
 	scrollbarDragging bool
 
+	// Mouse text selection in the chat viewport. Anchor/focus are in
+	// *content* coordinates (row counts from the top of the rendered
+	// viewport content, not the screen) so the selection survives
+	// scrolling and resizes. selDragging is true while the left button
+	// is held; selActive is true once the user releases with a non-zero
+	// range, until something clears it (right-click copy, mode change,
+	// new turn). buildCopyText/selectionContains/selectionRange consume
+	// these.
+	selDragging bool
+	selActive   bool
+	selAnchor   cellPos
+	selFocus    cellPos
+
+	// toast carries transient top-right notifications (e.g. "copied to
+	// clipboard"). Always non-nil after newTab so we don't have to
+	// nil-check on every Update tick.
+	toast *toastModel
+
 	askQuestions        []question
 	askAnswers          []qAnswer
 	askTab              int

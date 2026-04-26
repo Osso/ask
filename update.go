@@ -512,12 +512,31 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case tea.MouseClickMsg:
-		if msg.Button == tea.MouseLeft && m.mode == modeInput {
-			vpH := m.viewport.Height()
-			if msg.X == m.width-1 && msg.Y >= 0 && msg.Y < vpH && m.viewport.TotalLineCount() > vpH {
+		if m.mode != modeInput {
+			return m, nil
+		}
+		vpH := m.viewport.Height()
+		inViewport := msg.Y >= 0 && msg.Y < vpH
+		onScrollbar := inViewport && msg.X == m.width-1 && m.viewport.TotalLineCount() > vpH
+		switch msg.Button {
+		case tea.MouseLeft:
+			if onScrollbar {
 				m.scrollbarDragging = true
 				m.scrollViewportTo(msg.Y)
 				return m, nil
+			}
+			if inViewport && msg.X >= 0 && msg.X < m.width-1 {
+				m.clearSelection()
+				cell := m.screenToContentCell(msg.X, msg.Y)
+				m.selAnchor = cell
+				m.selFocus = cell
+				m.selDragging = true
+				m.lastContentFP = ""
+				return m, nil
+			}
+		case tea.MouseRight:
+			if m.selActive {
+				return m.copySelectionAndClear()
 			}
 		}
 		return m, nil
@@ -527,13 +546,37 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			m.scrollViewportTo(msg.Y)
 			return m, nil
 		}
+		if m.selDragging {
+			y := max(0, min(m.viewport.Height()-1, msg.Y))
+			x := max(0, min(m.width-2, msg.X))
+			m.selFocus = m.screenToContentCell(x, y)
+			m.lastContentFP = ""
+			return m, nil
+		}
 		return m, nil
 
 	case tea.MouseReleaseMsg:
 		if m.scrollbarDragging {
 			m.scrollbarDragging = false
 		}
+		if m.selDragging {
+			m.selDragging = false
+			if m.selAnchor == m.selFocus {
+				m.clearSelection()
+			} else {
+				m.selActive = true
+			}
+			m.lastContentFP = ""
+		}
 		return m, nil
+
+	case toastShowMsg, toastTickMsg:
+		if m.toast == nil {
+			return m, nil
+		}
+		next, cmd := m.toast.Update(msg)
+		m.toast = next
+		return m, cmd
 
 	case tea.PasteMsg:
 		if m.mode == modeInput && !m.busy {
@@ -1228,6 +1271,7 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 		m.worktreeName = ""
 		m.virtualSessionID = ""
 		m.history = nil
+		(&m).clearSelection()
 		m.appendHistory(outputStyle.Render(promptStyle.Render("✓ new session")))
 		return m, nil
 	case "/model":

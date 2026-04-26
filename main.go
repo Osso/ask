@@ -124,6 +124,8 @@ func newTab(id int, cfg askConfig) (*model, error) {
 		shellHistoryIdx:    -1,
 		fc:                 &frameCache{},
 	}
+	m.toast = NewToastModel(40, 3*time.Second)
+	m.toast.applyTheme(activeTheme)
 	if uc, err := readUsageCache(); err == nil {
 		m.usageCache = uc
 	}

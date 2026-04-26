@@ -2,11 +2,75 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
 )
+
+// clipboardLookPath and clipboardRun are package-level seams so tests can
+// stub the binary-selection / write logic without spawning real subprocesses.
+// Production code uses exec.LookPath and a real *exec.Cmd write.
+var (
+	clipboardLookPath = exec.LookPath
+	clipboardRun      = func(name string, stdin string, args ...string) error {
+		cmd := exec.Command(name, args...)
+		cmd.Stdin = strings.NewReader(stdin)
+		return cmd.Run()
+	}
+	clipboardGOOS = runtime.GOOS
+)
+
+// clipboardWriter pairs a binary name with the args it needs. Picked at
+// runtime by clipboardCopyText based on GOOS and PATH availability.
+type clipboardWriter struct {
+	name string
+	args []string
+}
+
+// clipboardWritersFor returns the writer candidates to try, in order, for
+// the given GOOS. macOS gets pbcopy; Linux tries the Wayland writer first
+// then the X11 fallbacks; everything else is empty (caller surfaces the
+// no-binary error).
+func clipboardWritersFor(goos string) []clipboardWriter {
+	switch goos {
+	case "darwin":
+		return []clipboardWriter{{name: "pbcopy"}}
+	case "linux":
+		return []clipboardWriter{
+			{name: "wl-copy"},
+			{name: "xclip", args: []string{"-selection", "clipboard"}},
+			{name: "xsel", args: []string{"--clipboard", "--input"}},
+		}
+	default:
+		return nil
+	}
+}
+
+// clipboardCopyText writes s to the OS clipboard. Picks pbcopy on macOS
+// and wl-copy / xclip / xsel on Linux (in that order). Returns a
+// descriptive error when no compatible binary is on PATH so the caller
+// can surface it via toast.
+func clipboardCopyText(s string) error {
+	writers := clipboardWritersFor(clipboardGOOS)
+	if len(writers) == 0 {
+		return fmt.Errorf("clipboard not supported on %s", clipboardGOOS)
+	}
+	var tried []string
+	for _, w := range writers {
+		if _, err := clipboardLookPath(w.name); err != nil {
+			tried = append(tried, w.name)
+			continue
+		}
+		if err := clipboardRun(w.name, s, w.args...); err != nil {
+			return fmt.Errorf("%s: %w", w.name, err)
+		}
+		return nil
+	}
+	return fmt.Errorf("no clipboard binary available (tried %s)", strings.Join(tried, ", "))
+}
 
 type imagePastedMsg struct {
 	data       []byte

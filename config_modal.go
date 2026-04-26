@@ -70,6 +70,7 @@ func (m model) refreshHistoryCmd() tea.Cmd {
 }
 
 func (m model) startConfigModal() model {
+	(&m).clearSelection()
 	m.mode = modeConfig
 	m.configFilter = ""
 	m.configCursor = 0

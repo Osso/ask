@@ -39,6 +39,7 @@ const (
 const askBoxWidth = 100
 
 func (m model) startAsk(qs []question) model {
+	(&m).clearSelection()
 	m.mode = modeAskQuestion
 	m.askQuestions = qs
 	m.askAnswers = make([]qAnswer, len(qs))

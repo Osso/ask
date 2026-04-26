@@ -528,6 +528,10 @@ func (m model) View() tea.View {
 		}
 	}
 
+	if m.toast != nil && m.toast.hasActive() {
+		v.Content = m.toast.Render(v.Content)
+	}
+
 	if m.mode == modeInput {
 		if c := m.input.Cursor(); c != nil {
 			v.Cursor = c
@@ -565,12 +569,13 @@ func (m model) viewportWithScrollbar() string {
 	if m.fc == nil {
 		return m.buildViewportWithScrollbar()
 	}
-	fp := fmt.Sprintf("%d|%d|%d|%s|%t",
+	fp := fmt.Sprintf("%d|%d|%d|%s|%t|%s",
 		m.viewport.Width(),
 		m.viewport.Height(),
 		m.viewport.YOffset(),
 		m.lastContentFP,
-		m.mode == modeInput)
+		m.mode == modeInput,
+		m.selectionFingerprint())
 	if m.fc.vbFP == fp {
 		if debugOn {
 			debugLog("    vb cache HIT")
@@ -587,7 +592,7 @@ func (m model) viewportWithScrollbar() string {
 }
 
 func (m model) buildViewportWithScrollbar() string {
-	vpView := m.cachedViewportView()
+	vpView := m.applySelectionHighlight(m.cachedViewportView())
 	if m.mode != modeInput || m.viewport.TotalLineCount() <= m.viewport.Height() {
 		return vpView
 	}
@@ -600,6 +605,43 @@ func (m model) buildViewportWithScrollbar() string {
 		if i < len(bar) {
 			lines[i] += bar[i]
 		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// applySelectionHighlight overlays the active selection background on
+// the rendered viewport content. No-op when there's no selection so
+// the steady-state render path is unchanged. Walks every visible row
+// once, asks selectionRenderMask for the col range to paint, and uses
+// lipgloss.StyleRanges to splice the background style in without
+// losing the line's existing ANSI foreground colors at the boundaries.
+// Computes entryRowRanges once per pass and reuses it for every row,
+// so multi-row selections don't quadratically rewalk the history.
+func (m model) applySelectionHighlight(vpView string) string {
+	if !m.selDragging && !m.selActive {
+		return vpView
+	}
+	if _, ok := m.selectionRange(); !ok {
+		return vpView
+	}
+	frameTop := m.viewport.Style.GetPaddingTop() +
+		m.viewport.Style.GetMarginTop() +
+		m.viewport.Style.GetBorderTopSize()
+	yOffset := m.viewport.YOffset()
+	style := selectionStyle()
+	ranges := m.entryRowRanges()
+	lines := strings.Split(vpView, "\n")
+	for i := range lines {
+		if i < frameTop {
+			continue
+		}
+		contentRow := (i - frameTop) + yOffset
+		lineW := lipgloss.Width(lines[i])
+		start, end, ok := m.selectionRenderMask(contentRow, lineW, ranges)
+		if !ok {
+			continue
+		}
+		lines[i] = lipgloss.StyleRanges(lines[i], lipgloss.NewRange(start, end, style))
 	}
 	return strings.Join(lines, "\n")
 }
