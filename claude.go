@@ -106,6 +106,12 @@ func claudeHookSettings(mcpPort int) string {
 					"command": hookCmd("subagent-stop"),
 				}},
 			}},
+			"Stop": []any{map[string]any{
+				"hooks": []any{map[string]any{
+					"type":    "command",
+					"command": "/home/osso/.cargo/bin/claude-plan-hook",
+				}},
+			}},
 		},
 	}
 	b, _ := json.Marshal(cfg)

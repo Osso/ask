@@ -122,7 +122,7 @@ func TestClaudeHookSettings_RegistersSubagentHooks(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
 		t.Fatalf("settings not JSON (%v): %s", err, raw)
 	}
-	for _, ev := range []string{"PreToolUse", "SubagentStart", "SubagentStop"} {
+	for _, ev := range []string{"PreToolUse", "SubagentStart", "SubagentStop", "Stop"} {
 		if _, ok := parsed.Hooks[ev]; !ok {
 			t.Errorf("settings missing %s hook: %s", ev, raw)
 		}
@@ -133,6 +133,7 @@ func TestClaudeHookSettings_RegistersSubagentHooks(t *testing.T) {
 	for _, want := range []string{
 		"_hook subagent-start",
 		"_hook subagent-stop",
+		"claude-plan-hook",
 		"--port 54321",
 	} {
 		if !strings.Contains(raw, want) {
