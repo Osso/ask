@@ -178,6 +178,13 @@ type toolResultMsg struct {
 	proc       *providerProc
 }
 
+type hookOutputMsg struct {
+	eventName string
+	output    string
+	isError   bool
+	proc      *providerProc
+}
+
 type stderrBuf struct {
 	mu   sync.Mutex
 	data []byte
@@ -426,8 +433,8 @@ type model struct {
 	// the actual visible columns).
 	rendererWidth int
 
-	mcpPort       int
-	providerModel string
+	mcpPort           int
+	providerModel     string
 	providerEffort    string
 	ollamaHost        string
 	ollamaModel       string

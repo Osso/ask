@@ -253,6 +253,18 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		}
 		return m, nil
 
+	case hookOutputMsg:
+		if msg.proc != m.proc {
+			return m, nil
+		}
+		if msg.output != "" {
+			m.appendHistory(renderHookOutputBlock(msg.eventName, msg.output, msg.isError))
+		}
+		if m.streamCh != nil {
+			return m, nextStreamCmd(m.streamCh)
+		}
+		return m, nil
+
 	case providerInitLoadedMsg:
 		if msg.tabID != m.id {
 			return m, nil

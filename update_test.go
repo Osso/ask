@@ -533,6 +533,20 @@ func TestUpdate_ToolResultMsgDroppedWhenQuiet(t *testing.T) {
 	}
 }
 
+func TestUpdate_HookOutputMsgAlwaysRenders(t *testing.T) {
+	m := newTestModel(t, newFakeProvider())
+	m.proc = &providerProc{}
+	m.toolOutputMode = toolOutputOff
+	m.quietMode = true
+	m2, _ := runUpdate(t, m, hookOutputMsg{eventName: "stop", output: "Next task from PLAN.md", proc: m.proc})
+	if len(m2.history) != 1 {
+		t.Fatalf("want 1 history entry, got %d", len(m2.history))
+	}
+	if !strings.Contains(m2.history[0].text, "Next task from PLAN.md") {
+		t.Fatalf("entry missing hook output: %q", m2.history[0].text)
+	}
+}
+
 func TestUpdate_BackgroundResultGatedByMode(t *testing.T) {
 	// The Bash background-launch ack is hidden in short mode (the user's
 	// stated reason for adding the flag) but resurfaces in full mode for

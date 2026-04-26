@@ -569,6 +569,11 @@ func codexEventToMsgs(ev map[string]any, proc *providerProc) []tea.Msg {
 			providerDoneMsg{res: res, proc: proc},
 			turnCompleteMsg{proc: proc},
 		}
+	case "hook/completed":
+		if msg := codexHookOutputMsg(ev, proc); msg != nil {
+			return []tea.Msg{*msg}
+		}
+		return nil
 	case "account/rateLimits/updated":
 		params, _ := ev["params"].(map[string]any)
 		rl, _ := params["rateLimits"].(map[string]any)
@@ -609,6 +614,52 @@ func codexEventToMsgs(ev map[string]any, proc *providerProc) []tea.Msg {
 		}
 	}
 	return nil
+}
+
+func codexHookOutputMsg(ev map[string]any, proc *providerProc) *hookOutputMsg {
+	params, _ := ev["params"].(map[string]any)
+	run, _ := params["run"].(map[string]any)
+	if run == nil {
+		return nil
+	}
+	entries, _ := run["entries"].([]any)
+	if len(entries) == 0 {
+		return nil
+	}
+	var lines []string
+	var isError bool
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		if entry == nil {
+			continue
+		}
+		text, _ := entry["text"].(string)
+		text = strings.TrimSpace(text)
+		if text == "" {
+			continue
+		}
+		kind, _ := entry["kind"].(string)
+		switch kind {
+		case "error", "stop":
+			isError = true
+		}
+		lines = append(lines, text)
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	eventName, _ := run["eventName"].(string)
+	status, _ := run["status"].(string)
+	switch status {
+	case "failed", "blocked", "stopped":
+		isError = true
+	}
+	return &hookOutputMsg{
+		eventName: eventName,
+		output:    strings.Join(lines, "\n"),
+		isError:   isError,
+		proc:      proc,
+	}
 }
 
 // codexToolOutputMsgs converts a completed commandExecution or

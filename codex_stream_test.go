@@ -268,6 +268,43 @@ func TestCodexEventToMsgs_TurnCompletedFailedMarksError(t *testing.T) {
 	}
 }
 
+func TestCodexEventToMsgs_HookCompletedEmitsHookOutput(t *testing.T) {
+	proc := &providerProc{}
+	ev := parseCodexEvent(t, `{"method":"hook/completed","params":{"threadId":"tid","turnId":"turn","run":{
+		"id":"hook-run","eventName":"stop","handlerType":"command","executionMode":"blocking",
+		"scope":"user","sourcePath":"/home/osso/.codex/config.toml","source":"user",
+		"displayOrder":0,"status":"blocked","statusMessage":null,
+		"startedAt":1,"completedAt":2,"durationMs":1,
+		"entries":[
+			{"kind":"stop","text":"Next task from PLAN.md:\n- [ ] Verify Blizzard_TalentUI addon is NOT tainted"},
+			{"kind":"context","text":"context should still show"}
+		]
+	}}}`)
+	msgs := codexEventToMsgs(ev, proc)
+	if len(msgs) != 1 {
+		t.Fatalf("want 1 msg, got %d: %v", len(msgs), msgs)
+	}
+	got, ok := msgs[0].(hookOutputMsg)
+	if !ok {
+		t.Fatalf("want hookOutputMsg, got %T %+v", msgs[0], msgs[0])
+	}
+	if got.eventName != "stop" {
+		t.Errorf("eventName=%q want stop", got.eventName)
+	}
+	if !got.isError {
+		t.Error("blocked stop hook should render as error")
+	}
+	if !strings.Contains(got.output, "Verify Blizzard_TalentUI") {
+		t.Errorf("output missing hook text: %q", got.output)
+	}
+	if !strings.Contains(got.output, "context should still show") {
+		t.Errorf("output missing context entry: %q", got.output)
+	}
+	if got.proc != proc {
+		t.Error("proc not preserved")
+	}
+}
+
 func TestCodexEventToMsgs_ErrorNotificationMarksError(t *testing.T) {
 	proc := &providerProc{}
 	ev := parseCodexEvent(t, `{"method":"error","params":{"threadId":"t","turnId":"r","willRetry":false,"error":{"message":"boom"}}}`)

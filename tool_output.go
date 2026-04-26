@@ -392,6 +392,24 @@ func renderToolResultBlock(output string, isError bool) string {
 	return strings.Join(rows, "\n")
 }
 
+func renderHookOutputBlock(eventName, output string, isError bool) string {
+	eventName = nonEmpty(eventName, "hook")
+	rows := []string{outputStyle.Render(diffPathStyle.Render("▸ " + eventName + " hook"))}
+	body, trimmedLines := clampToolOutput(output)
+	for _, ln := range strings.Split(body, "\n") {
+		styled := toolResultStyle.Render("    " + ln)
+		if isError {
+			styled = errStyle.Render("    " + ln)
+		}
+		rows = append(rows, outputStyle.Render(styled))
+	}
+	if trimmedLines > 0 {
+		rows = append(rows, outputStyle.Render(toolResultStyle.Render(
+			"    (… "+pluralLines(trimmedLines)+" omitted)")))
+	}
+	return strings.Join(rows, "\n")
+}
+
 // clampToolOutput trims output to toolOutputMaxLines + toolOutputMaxChars.
 // Returns the kept body plus the number of lines trimmed off so the
 // caller can append a summary.
