@@ -179,6 +179,50 @@ func TestRenderToolCallActions_SearchFallsBackToCommand(t *testing.T) {
 	}
 }
 
+func TestRenderToolCallActions_UnknownSearchToolReclassifies(t *testing.T) {
+	// Codex tags `grep` as search but currently misses rg/fdfind/fd/ag/ack
+	// and hands them to us as "unknown". We reclassify so the row reads
+	// "search <query> in <path>" instead of "rg <query> <path>".
+	cases := []struct {
+		name    string
+		command string
+		want    string
+	}{
+		{"rg with path", "rg TODO src/", "search TODO in src/"},
+		{"rg query only", "rg TODO", "search TODO"},
+		{"fdfind", "fdfind config", "search config"},
+		{"fd", "fd main.go .", "search main.go in ."},
+		{"ag", "ag pattern lib/", "search pattern in lib/"},
+		{"=-style flag skipped", "rg --type=go TODO src/", "search TODO in src/"},
+		{"space-separated flag value over-eaten", "rg -t go TODO src/", "search go in TODO"},
+		{"quoted pattern", `rg "foo bar" src/`, "search foo bar in src/"},
+	}
+	for _, tc := range cases {
+		actions := []map[string]any{
+			{"type": "unknown", "command": tc.command},
+		}
+		out := renderToolCallActionsBlock("shell", actions, toolOutputShort)
+		if !strings.Contains(out, tc.want) {
+			t.Errorf("%s: expected %q in render of %q; got %q", tc.name, tc.want, tc.command, out)
+		}
+	}
+}
+
+func TestRenderToolCallActions_UnknownNonSearchKeepsProgram(t *testing.T) {
+	// Programs not in the search-tool set stay on the "<prog> <rest>"
+	// path so non-search shell calls aren't misrouted.
+	actions := []map[string]any{
+		{"type": "unknown", "command": "git log -6"},
+	}
+	out := renderToolCallActionsBlock("shell", actions, toolOutputShort)
+	if strings.Contains(out, "search") {
+		t.Errorf("git log should not reclassify to search; got %q", out)
+	}
+	if !strings.Contains(out, "git log -6") {
+		t.Errorf("expected raw 'git log -6'; got %q", out)
+	}
+}
+
 func TestRenderToolCallActions_ListFilesUsesPathOrCommand(t *testing.T) {
 	withPath := []map[string]any{
 		{"type": "listFiles", "path": "src/", "command": "ls src/"},

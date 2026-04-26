@@ -24,6 +24,7 @@ b187d8c mcp: enforce 1 MiB argument size limit on tool handlers
 60751bd shell: strip Anthropic credentials from shell subprocess env
 e57465c mcp: disable localhost bypass for DNS-rebinding protection
 tabs: rebind new-tab shortcut to Ctrl+N
+tool_output: reclassify rg/fdfind unknown actions as search
 ```
 
 ---
@@ -419,11 +420,19 @@ instead of the shell wrapper Codex used to invoke the command.
 - Action titles stay lowercase (`read`, `list`, `search`) per the user's
   request; `unknown` actions extract the program token as the title so the
   user sees `git log -6` rather than `run git log -6`.
+- `unknown` actions whose program is a known search tool (`rg`, `fd`,
+  `fdfind`, `ag`, `ack`) are reclassified as `search`, since codex itself
+  only tags `grep`. The args are parsed positionally (flag tokens dropped,
+  matched single/double quotes preserved) and the row reads `search
+  <query> in <path>` — falling back to the raw command when neither can
+  be inferred. Space-separated flag values (`rg -t go TODO src/`) over-eat
+  the next positional; that limitation is locked in by test.
 
 **Key files.**
 - `codex.go` (`codexToolOutputMsgs`, `codexCommandActions`)
 - `tool_output.go` (`renderToolCallActionsBlock`, `compactCommandActions`,
-  `renderSingleCommandAction`, `splitProgramAndArgs`)
+  `renderSingleCommandAction`, `splitProgramAndArgs`, `searchPrograms`,
+  `isSearchProgram`, `parseSearchArgs`, `splitShellTokens`, `searchBody`)
 - `tool_output_test.go`
 - `types.go` (`toolCallMsg.actions`)
 - `update.go` (`toolCallMsg` dispatch)
@@ -432,7 +441,7 @@ instead of the shell wrapper Codex used to invoke the command.
 **Tests to re-run after rebase.**
 - `go test ./...`
 - Focused:
-  `go test ./... -run 'RenderToolCallActions|CodexCommandActions|SplitProgramAndArgs|ToolCallMsgWithActions'`
+  `go test ./... -run 'RenderToolCallActions|CodexCommandActions|SplitProgramAndArgs|ToolCallMsgWithActions|UnknownSearchTool|UnknownNonSearch'`
 
 **Rebase risk.** Medium. Tied to the Codex v2 `commandExecution` schema —
 re-check after Codex app-server schema updates that may rename

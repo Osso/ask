@@ -239,6 +239,8 @@ func compactCommandActions(actions []map[string]any) []renderedCommandAction {
 // listFiles → "list <path>", search → "search <query> in <path>" (or
 // fallbacks), unknown → "<program> <rest>" with the first token used as
 // the verb so the user sees "git log" / "make build" instead of "run …".
+// Unknown commands whose program is a known search tool (rg, fdfind, …)
+// get reclassified as search since codex itself only tags `grep`.
 func renderSingleCommandAction(a map[string]any) renderedCommandAction {
 	t, _ := a["type"].(string)
 	command, _ := a["command"].(string)
@@ -258,21 +260,100 @@ func renderSingleCommandAction(a map[string]any) renderedCommandAction {
 	case "search":
 		query, _ := a["query"].(string)
 		path, _ := a["path"].(string)
-		var body string
-		switch {
-		case query != "" && path != "":
-			body = query + " in " + path
-		case query != "":
-			body = query
-		default:
-			body = command
-		}
-		return renderedCommandAction{title: "search", body: body}
+		return renderedCommandAction{title: "search", body: searchBody(query, path, command)}
 	case "unknown":
 		prog, rest := splitProgramAndArgs(command)
+		if isSearchProgram(prog) {
+			query, path := parseSearchArgs(rest)
+			return renderedCommandAction{title: "search", body: searchBody(query, path, command)}
+		}
 		return renderedCommandAction{title: prog, body: rest}
 	}
 	return renderedCommandAction{title: nonEmpty(t, "run"), body: command}
+}
+
+// searchPrograms is the set of CLIs we treat as text/file-search tools
+// when codex hands us an "unknown" action. Codex itself recognizes
+// `grep` and emits type:"search", but it currently misses ripgrep,
+// fd-find, and a few others — we reclassify here so the row reads
+// "search TODO in src/" instead of "rg TODO src/".
+var searchPrograms = map[string]bool{
+	"rg":     true,
+	"fd":     true,
+	"fdfind": true,
+	"ag":     true,
+	"ack":    true,
+}
+
+func isSearchProgram(name string) bool { return searchPrograms[name] }
+
+// parseSearchArgs walks the post-program token stream, drops anything
+// that looks like a flag, and returns the first two positional tokens
+// as (query, path). Flags that take a separate value (`-t go`) will
+// over-eat the next positional — we accept that for the common
+// `<tool> PATTERN PATH` shape and don't try to encode per-tool flag
+// arity. Quoted patterns are kept whole so `rg "foo bar" src/` parses
+// to ("foo bar", "src/").
+func parseSearchArgs(args string) (query, path string) {
+	var positional []string
+	for _, tok := range splitShellTokens(args) {
+		if strings.HasPrefix(tok, "-") {
+			continue
+		}
+		positional = append(positional, tok)
+	}
+	if len(positional) > 0 {
+		query = positional[0]
+	}
+	if len(positional) > 1 {
+		path = positional[1]
+	}
+	return
+}
+
+// splitShellTokens splits on whitespace but treats matched single or
+// double quotes as one token. Escapes and nested quoting aren't
+// handled — codex's `command` strings are display-shaped, not
+// roundtrippable shell, so the simple form is enough.
+func splitShellTokens(s string) []string {
+	var tokens []string
+	var cur strings.Builder
+	var quote byte
+	flush := func() {
+		if cur.Len() > 0 {
+			tokens = append(tokens, cur.String())
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case quote == 0 && (c == ' ' || c == '\t'):
+			flush()
+		case quote == 0 && (c == '"' || c == '\''):
+			quote = c
+		case quote != 0 && c == quote:
+			quote = 0
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return tokens
+}
+
+// searchBody formats a search action's body. With both query and path
+// it reads "<query> in <path>"; with only a query, just the query;
+// otherwise the raw command so the user still sees what ran.
+func searchBody(query, path, command string) string {
+	switch {
+	case query != "" && path != "":
+		return query + " in " + path
+	case query != "":
+		return query
+	default:
+		return command
+	}
 }
 
 // splitProgramAndArgs splits a command string at its first whitespace so
