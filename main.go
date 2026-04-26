@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -133,12 +134,81 @@ func newTab(id int, cfg askConfig) (*model, error) {
 	return m, nil
 }
 
+// printHelp writes the user-facing CLI usage block. Kept as a shared
+// helper so `ask --help` (stdout, exit 0) and the `ask resume` arity
+// error path (stderr, exit 2) print the exact same text.
+func printHelp(w io.Writer) {
+	fmt.Fprint(w, `Usage:
+  ask                start a new ask TUI session in the current directory
+  ask resume <vid>   resume the virtual session with id <vid> — chdirs to
+                     the workspace recorded for that session, then opens
+                     the TUI already attached to it
+  ask --help         show this help
+
+Virtual session ids look like vs-<hex> and are listed by /resume inside
+the TUI. Quitting ask prints the active tab's id so it can be passed to
+`+"`"+`ask resume`+"`"+` later.
+`)
+}
+
+// resumeStartup looks vsID up in ~/.config/ask/sessions.json, chdirs
+// to the recorded workspace, and returns the validated id so newTab
+// can pre-seed model.virtualSessionID. Init then dispatches a
+// startupResumeMsg that drives the same flow the picker uses, so all
+// the cross-provider translation / native-id lookup logic stays in
+// resumeVirtualSession.
+func resumeStartup(vsID string) (string, error) {
+	if vsID == "" {
+		return "", fmt.Errorf("missing virtual session id")
+	}
+	store, err := loadVirtualSessions()
+	if err != nil {
+		return "", err
+	}
+	vs := store.findByID(vsID)
+	if vs == nil {
+		return "", fmt.Errorf("virtual session %q not found", vsID)
+	}
+	ws := vs.Workspace
+	if ws == "" {
+		return "", fmt.Errorf("virtual session %q has no workspace recorded", vsID)
+	}
+	if _, err := os.Stat(ws); err != nil {
+		return "", fmt.Errorf("workspace %s: %w", ws, err)
+	}
+	if err := os.Chdir(ws); err != nil {
+		return "", fmt.Errorf("chdir %s: %w", ws, err)
+	}
+	return vs.ID, nil
+}
+
 func main() {
 	if len(os.Args) >= 2 && os.Args[1] == "_hook" {
 		if err := runHookSubcommand(os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, "ask _hook:", err)
 		}
 		return
+	}
+	var startupResumeVID string
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "--help", "-h", "help":
+			printHelp(os.Stdout)
+			return
+		case "resume":
+			if len(os.Args) < 3 {
+				fmt.Fprintln(os.Stderr, "ask resume: missing virtual session id")
+				fmt.Fprintln(os.Stderr)
+				printHelp(os.Stderr)
+				os.Exit(2)
+			}
+			vid, err := resumeStartup(os.Args[2])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "ask resume:", err)
+				os.Exit(1)
+			}
+			startupResumeVID = vid
+		}
 	}
 	cfg, _ := loadConfig()
 	_ = saveConfig(cfg)
@@ -156,16 +226,37 @@ func main() {
 		fmt.Fprintln(os.Stderr, "ask: mcp:", err)
 		os.Exit(1)
 	}
+	if startupResumeVID != "" {
+		first.virtualSessionID = startupResumeVID
+	}
 	a := newApp(first)
 	p := tea.NewProgram(a, tea.WithFPS(120))
 	setTeaProgram(p)
 	final, err := p.Run()
 	if fa, ok := final.(app); ok {
 		fa.shutdown()
+		printLastSession(os.Stdout, fa)
 	}
 	pruneWorktrees()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ask:", err)
 		os.Exit(1)
 	}
+}
+
+// printLastSession writes one `last session: <vid>` line for the
+// active tab when it has a virtual session id. Kept as a separate
+// function so tests can verify the output without spinning up a real
+// tea.Program — and so multi-tab behaviour stays one-line: the user
+// can rerun ask on the active tab's id; sibling tabs are still
+// listed under /resume in the new TUI.
+func printLastSession(w io.Writer, a app) {
+	if len(a.tabs) == 0 {
+		return
+	}
+	t := a.activeTab()
+	if t == nil || t.virtualSessionID == "" {
+		return
+	}
+	fmt.Fprintf(w, "last session: %s\n", t.virtualSessionID)
 }

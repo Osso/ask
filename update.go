@@ -20,7 +20,26 @@ func (m model) Init() tea.Cmd {
 	if invalid := validateAskCwd(m.cwd); invalid.Msg != "" {
 		return cursor.Blink
 	}
-	return tea.Batch(m.provider.ProbeInit(m.sessionArgs()), cursor.Blink)
+	cmds := []tea.Cmd{m.provider.ProbeInit(m.sessionArgs()), cursor.Blink}
+	// `ask resume <vid>` pre-seeds m.virtualSessionID before the program
+	// runs. Once Init fires we kick off the same resume the picker uses;
+	// gating on empty m.sessionID keeps later Inits (Ctrl+T new tabs that
+	// inherit a fresh state) from re-replaying.
+	if m.virtualSessionID != "" && m.sessionID == "" {
+		cmds = append(cmds, startupResumeCmd(m.id, m.virtualSessionID))
+	}
+	return tea.Batch(cmds...)
+}
+
+// startupResumeCmd returns a tea.Cmd that emits a startupResumeMsg
+// targeted at tabID. Used by Init when the CLI seeded a vsID so the
+// resume runs on the bubbletea event loop — model mutations inside
+// resumeVirtualSession (history reset, busy flag, etc.) only land
+// reliably when applied through Update.
+func startupResumeCmd(tabID int, vsID string) tea.Cmd {
+	return func() tea.Msg {
+		return startupResumeMsg{tabID: tabID, vsID: vsID}
+	}
 }
 
 func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
@@ -443,6 +462,19 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			m.history = msg.entries
 		}
 		return m, nil
+
+	case startupResumeMsg:
+		if msg.tabID != m.id {
+			return m, nil
+		}
+		// Picker entries always carry id == virtualSessionID — same here.
+		// resumeVirtualSession owns the load-vs / dispatch-history /
+		// dispatch-translate decision tree, so a CLI resume goes through
+		// exactly the same code path as Enter on the picker.
+		return m.resumeVirtualSession(sessionEntry{
+			id:               msg.vsID,
+			virtualSessionID: msg.vsID,
+		})
 
 	case sessionsLoadedMsg:
 		if msg.tabID != m.id {

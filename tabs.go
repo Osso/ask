@@ -126,6 +126,8 @@ func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.dispatchByTabID(m.tabID, msg)
 	case sessionsLoadedMsg:
 		return a.dispatchByTabID(m.tabID, msg)
+	case startupResumeMsg:
+		return a.dispatchByTabID(m.tabID, msg)
 	case historyLoadedMsg:
 		return a.dispatchByTabID(m.tabID, msg)
 	case virtualSessionMaterializedMsg:

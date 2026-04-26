@@ -244,6 +244,16 @@ type closeTabMsg struct {
 	tabID int
 }
 
+// startupResumeMsg is fired by Init when the model was pre-seeded with
+// a virtualSessionID by `ask resume <vid>` on the CLI. It's the same
+// trigger as picking the row from the /resume picker — Update routes it
+// straight into resumeVirtualSession so the cross-provider translation
+// path stays in one place.
+type startupResumeMsg struct {
+	tabID int
+	vsID  string
+}
+
 type model struct {
 	id        int
 	cwd       string
