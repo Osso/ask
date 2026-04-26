@@ -57,13 +57,13 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.input.SetWidth(msg.Width - 5)
-		m.renderer = newRenderer(msg.Width)
-		for i := range m.history {
-			switch m.history[i].kind {
-			case histResponse, histUser:
-				m.history[i].rendered = ""
-			}
-		}
+		// We don't pre-walk m.history clearing rendered fields any
+		// more — the chatView re-wraps lazily as entries enter the
+		// visible window, so a 5000-entry resize stays fast even
+		// before the first scroll. The wrap cache invalidates via
+		// wrappedFor != width inside ensureEntryWrapped, which also
+		// owns rebuilding m.renderer at the new width.
+		m.lastContentFP = ""
 		return m, nil
 
 	case spinner.TickMsg:
@@ -436,7 +436,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		}
 		m.lastContentFP = ""
 		m.layout()
-		m.viewport.GotoBottom()
+		m.chat.GotoBottom()
 		return m, nil
 
 	case virtualSessionMaterializedMsg:
@@ -538,7 +538,8 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 	case tea.MouseWheelMsg:
 		if m.mode == modeInput {
 			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
+			m.chat, cmd = m.chat.Update(msg)
+			m.lastContentFP = ""
 			return m, cmd
 		}
 		return m, nil
@@ -547,9 +548,9 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		if m.mode != modeInput {
 			return m, nil
 		}
-		vpH := m.viewport.Height()
+		vpH := m.chat.Height()
 		inViewport := msg.Y >= 0 && msg.Y < vpH
-		onScrollbar := inViewport && msg.X == m.width-1 && m.viewport.TotalLineCount() > vpH
+		onScrollbar := inViewport && msg.X == m.width-1 && m.chat.TotalLineCount() > vpH
 		switch msg.Button {
 		case tea.MouseLeft:
 			if onScrollbar {
@@ -579,7 +580,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 		if m.selDragging {
-			y := max(0, min(m.viewport.Height()-1, msg.Y))
+			y := max(0, min(m.chat.Height()-1, msg.Y))
 			x := max(0, min(m.width-2, msg.X))
 			m.selFocus = m.screenToContentCell(x, y)
 			m.lastContentFP = ""
@@ -639,6 +640,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 					e.text += "\n"
 				}
 				e.text += joined
+				invalidateEntryRender(e)
 			} else {
 				m.appendHistory(joined)
 				m.shellOutIdx = len(m.history) - 1
@@ -836,10 +838,12 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 		case tea.KeyPgUp:
-			m.viewport.ScrollUp(m.viewport.Height() / 2)
+			m.chat.ScrollUp(m.chat.Height() / 2)
+			m.lastContentFP = ""
 			return m, nil
 		case tea.KeyPgDown:
-			m.viewport.ScrollDown(m.viewport.Height() / 2)
+			m.chat.ScrollDown(m.chat.Height() / 2)
+			m.lastContentFP = ""
 			return m, nil
 		case tea.KeyEnter:
 			val := m.input.Value()

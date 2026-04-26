@@ -10,7 +10,6 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -250,14 +249,14 @@ func newTestModel(t *testing.T, prov Provider) model {
 	ta := textarea.New()
 	ta.SetHeight(3)
 	ta.DynamicHeight = true
-	vp := viewport.New()
+	vp := newChatView()
 	sp := spinner.New()
 	return model{
 		id:              1,
 		cwd:             t.TempDir(),
 		provider:        prov,
 		input:           ta,
-		viewport:        vp,
+		chat:            vp,
 		spinner:         sp,
 		renderer:        newRenderer(100),
 		width:           100,

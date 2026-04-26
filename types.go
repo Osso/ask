@@ -7,7 +7,6 @@ import (
 
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	glamour "charm.land/glamour/v2"
 )
@@ -211,6 +210,32 @@ type historyEntry struct {
 	kind     historyKind
 	text     string
 	rendered string
+
+	// wrapped is the soft-wrapped slice of rendered lines for the
+	// width recorded in wrappedFor. It is the only thing chatView
+	// reads when slicing the visible window: caching it per entry
+	// means width changes only re-wrap visited entries instead of
+	// the entire history (the perf win of the lazy viewport).
+	//
+	// wrappedFor == 0 means "cache invalid, recompute from rendered
+	// (and re-glamour from text if rendered is empty)". Any non-zero
+	// width may be served from the cache as long as it equals the
+	// caller's requested width.
+	wrapped    []string
+	wrappedFor int
+
+	// rawLines is the cached newline+1 count of the source string
+	// (rendered if non-empty, else text). It's the cheap fallback
+	// used by the chatView when an entry is off-screen and has not
+	// been wrapped at the current width — refreshChatTotals reads
+	// it once per frame per entry, so without this cache a 20 MB
+	// history would cost a full O(text-size) walk per frame.
+	//
+	// rawLinesFor records len(text) at the moment rawLines was
+	// computed. A change (shell streaming, in-place truncation)
+	// invalidates the cache transparently on the next read.
+	rawLines    int
+	rawLinesFor int
 }
 
 type sessionsLoadedMsg struct {
@@ -262,7 +287,7 @@ type model struct {
 	provider Provider
 
 	input     textarea.Model
-	viewport  viewport.Model
+	chat      chatView
 	spinner   spinner.Model
 	renderer  *glamour.TermRenderer
 	sessionID string
@@ -393,8 +418,15 @@ type model struct {
 
 	fc *frameCache
 
-	mcpPort           int
-	providerModel     string
+	// rendererWidth records the wrap width m.renderer was built
+	// for. ensureEntryWrapped checks it before glamour-rendering
+	// an entry so a viewport resize transparently re-glamours at
+	// the new width (matching table/code-block column layout to
+	// the actual visible columns).
+	rendererWidth int
+
+	mcpPort       int
+	providerModel string
 	providerEffort    string
 	ollamaHost        string
 	ollamaModel       string

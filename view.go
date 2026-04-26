@@ -9,13 +9,13 @@ import (
 	"time"
 
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	glamour "charm.land/glamour/v2"
 	"charm.land/glamour/v2/ansi"
 	"charm.land/glamour/v2/styles"
 	lipgloss "charm.land/lipgloss/v2"
 	uv "github.com/charmbracelet/ultraviolet"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 func newRenderer(width int) *glamour.TermRenderer {
@@ -117,26 +117,37 @@ func buildGlamourStyle(t theme) ansi.StyleConfig {
 	return s
 }
 
+// renderAheadEntries is how many entries to wrap above and below the
+// visible window each frame. Keeps scrolling smooth without paying the
+// full glamour cost of the entire history. Small enough that touching
+// 5000 entries via a width change still costs at most ~2*pad+visible
+// renders rather than 5000.
+const renderAheadEntries = 10
+
 func (m *model) layout() {
-	atBottom := m.viewport.AtBottom()
+	atBottom := m.chat.AtBottom()
 	inputH := m.input.Height()
 	extra := m.pendingBlockHeight() + m.todoBlockHeight() + m.spinnerBlockHeight() + m.statusChipHeight()
-	vpH := m.height - 1 - inputH - extra
-	if vpH < 1 {
-		vpH = 1
+	vpH := max(1, m.height-1-inputH-extra)
+	vpW := max(1, m.width-1)
+	if m.chat.width != vpW {
+		// vpW shifts on terminal resize *and* on input growth (the
+		// textarea is dynamic-height). The fingerprint only mixes in
+		// m.width, so an input-only change wouldn't invalidate the
+		// cache without this explicit drop.
+		m.lastContentFP = ""
 	}
-	vpW := m.width - 1
-	if vpW < 1 {
-		vpW = 1
-	}
-	m.viewport.SetWidth(vpW)
-	m.viewport.SetHeight(vpH)
+	m.chat.SetWidth(vpW)
+	m.chat.SetHeight(vpH)
 	if fp := m.contentFingerprint(); fp != m.lastContentFP {
-		m.viewport.SetContent(m.viewportContent())
 		m.lastContentFP = fp
 	}
+	m.refreshChatTotals()
 	if atBottom {
-		m.viewport.GotoBottom()
+		m.chat.GotoBottom()
+	} else {
+		// Re-clamp in case totals shrank (e.g. /new wiped history).
+		m.chat.SetYOffset(m.chat.YOffset())
 	}
 }
 
@@ -148,20 +159,276 @@ func (m *model) contentFingerprint() string {
 	return fmt.Sprintf("%d|%d|%d", len(m.history), m.width, shellLen)
 }
 
-func (m *model) viewportContent() string {
-	parts := make([]string, 0, len(m.history))
-	for i := range m.history {
-		if m.history[i].rendered == "" {
-			switch m.history[i].kind {
-			case histResponse:
-				m.history[i].rendered = m.renderResponse(m.history[i].text)
-			case histUser:
-				m.history[i].rendered = m.renderUserBar(m.history[i].text)
-			}
-		}
-		parts = append(parts, m.renderEntry(m.history[i]))
+// estimateEntryLines returns the wrapped line count of entry idx
+// without forcing a glamour render. Returns the exact wrapped count
+// when the cache is valid for the current width; otherwise falls
+// back to a cheap cached newline count (rawLines). Memoising the
+// fallback keeps refreshChatTotals at O(N entries) instead of
+// O(total-text-size) per frame, which matters for 10–20 MB histories.
+func (m *model) estimateEntryLines(idx int) int {
+	e := &m.history[idx]
+	if e.wrapped != nil && e.wrappedFor == m.chat.contentWidth() {
+		return len(e.wrapped)
 	}
-	return strings.Join(parts, "\n\n")
+	if e.rawLines == 0 || e.rawLinesFor != len(e.text) {
+		src := e.rendered
+		if src == "" {
+			src = e.text
+		}
+		if src == "" {
+			e.rawLines = 1
+		} else {
+			e.rawLines = strings.Count(src, "\n") + 1
+		}
+		e.rawLinesFor = len(e.text)
+	}
+	return e.rawLines
+}
+
+// ensureEntryWrapped guarantees that history[idx].wrapped is valid for
+// the requested width, glamour-rendering and soft-wrapping on demand.
+// Pure mutator: callers can invoke it from rendering paths because the
+// cache is single-writer (chatView frames are sequential on the tea
+// loop goroutine).
+//
+// histResponse and histUser entries are width-dependent at the glamour
+// / userBar layer (table column widths, code-block padding, user-bar
+// text width) — so a width change forces a fresh render, not just a
+// re-wrap. Soft-wrapping a wider glamour output to a narrower viewport
+// would leave table rows and code-block padding hard-cut mid-cell,
+// producing the visible-overflow-on-next-line pattern. Cost is bounded
+// because callers (viewportContent) invoke this only for the visible
+// window plus a small render-ahead pad.
+//
+// histPrerendered entries (tool blocks, diffs, slash output) keep
+// their original rendered string across width changes — we don't have
+// the source to re-style — and rely on the soft-wrap below.
+func (m *model) ensureEntryWrapped(idx, width int) {
+	if width <= 0 || idx < 0 || idx >= len(m.history) {
+		return
+	}
+	e := &m.history[idx]
+	if e.wrappedFor != width {
+		switch e.kind {
+		case histResponse, histUser:
+			e.rendered = ""
+		}
+	}
+	needsRender := e.rendered == ""
+	if e.wrappedFor == width && e.wrapped != nil && !needsRender {
+		return
+	}
+	if needsRender {
+		switch e.kind {
+		case histResponse:
+			if m.renderer == nil || m.rendererWidth != width {
+				m.renderer = newRenderer(width)
+				m.rendererWidth = width
+			}
+			e.rendered = m.renderResponse(e.text)
+		case histUser:
+			e.rendered = m.renderUserBarAt(e.text, width)
+		default:
+			e.rendered = e.text
+		}
+	}
+	e.wrapped = wrapStyledLines(e.rendered, width)
+	e.wrappedFor = width
+}
+
+// renderUserBarAt renders the user-message bar at an explicit width
+// rather than reading the stale m.width snapshot. ensureEntryWrapped
+// uses this when the chat-view width drifts away from m.width (e.g.
+// the scrollbar column subtracts one) so the bar's box matches the
+// visible columns.
+func (m model) renderUserBarAt(text string, width int) string {
+	w := width - 7
+	if w < 20 {
+		w = 20
+	}
+	return userBarStyle.Width(w).Render(text)
+}
+
+// invalidateEntryRender drops the per-entry render + wrap cache so the
+// next ensureEntryWrapped pass re-glamours and re-wraps from text.
+// Call this after mutating entry.text (shell streaming, quiet-mode
+// merge) so the next layout pass shows the updated content.
+func invalidateEntryRender(e *historyEntry) {
+	e.rendered = ""
+	e.wrapped = nil
+	e.wrappedFor = 0
+	e.rawLines = 0
+	e.rawLinesFor = 0
+}
+
+// wrapStyledLines hard-wraps a styled (ANSI) string to width columns.
+// One logical line per element of the result; lines that already fit
+// pass through verbatim. Mirrors what bubbles' viewport does internally
+// during soft-wrap (ansi.Cut on each over-long line). Width <= 0
+// returns the string as a single element so callers don't crash before
+// the viewport has its dimensions.
+func wrapStyledLines(rendered string, width int) []string {
+	if width <= 0 {
+		return []string{rendered}
+	}
+	src := strings.Split(rendered, "\n")
+	out := make([]string, 0, len(src))
+	for _, line := range src {
+		lw := xansi.StringWidth(line)
+		if lw <= width {
+			out = append(out, line)
+			continue
+		}
+		for off := 0; off < lw; off += width {
+			out = append(out, xansi.Cut(line, off, off+width))
+		}
+	}
+	if len(out) == 0 {
+		out = []string{""}
+	}
+	return out
+}
+
+// refreshChatTotals walks history once per layout pass to populate
+// m.chat.totalLines (exact for cached entries, estimated for the rest).
+// O(N) over history but no allocation per entry — fine even for 20 MB
+// because we don't render or wrap; we only read cached counts and
+// count newlines. The exact total firms up as the user scrolls and
+// more entries get rendered.
+func (m *model) refreshChatTotals() {
+	total := 0
+	n := len(m.history)
+	for i := 0; i < n; i++ {
+		total += m.estimateEntryLines(i)
+		if i < n-1 {
+			total++ // blank separator row between entries
+		}
+	}
+	m.chat.totalLines = total
+}
+
+// chatVisibleRange returns the half-open [first, last) window of
+// history indices that currently overlap the visible content rows,
+// using cumulative line counts seeded by the lazy estimate. Returns
+// (-1, -1) when the chat has no rows to draw.
+func (m *model) chatVisibleRange() (int, int) {
+	contentH := m.chat.contentHeight()
+	if contentH <= 0 || len(m.history) == 0 {
+		return -1, -1
+	}
+	yStart := m.chat.YOffset()
+	yEnd := yStart + contentH
+	row := 0
+	first := -1
+	last := -1
+	n := len(m.history)
+	for i := 0; i < n; i++ {
+		h := m.estimateEntryLines(i)
+		entryEnd := row + h
+		if first == -1 && entryEnd > yStart {
+			first = i
+		}
+		if first != -1 && row >= yEnd {
+			break
+		}
+		if first != -1 {
+			last = i + 1
+		}
+		row = entryEnd
+		if i < n-1 {
+			row++
+		}
+	}
+	if first == -1 {
+		return -1, -1
+	}
+	return first, last
+}
+
+// viewportContent renders the visible window from the chat view's
+// per-entry wrap cache. Off-screen entries pay nothing — only the
+// visible range plus a small render-ahead pad gets glamoured/wrapped.
+// Output is padded to contentHeight with blank lines so the viewport
+// frame stays a fixed grid even while content is short.
+func (m *model) viewportContent() string {
+	contentW := m.chat.contentWidth()
+	contentH := m.chat.contentHeight()
+	if contentW <= 0 || contentH <= 0 {
+		return m.blankChatFrame(contentH)
+	}
+	first, last := m.chatVisibleRange()
+	if first == -1 {
+		return m.blankChatFrame(contentH)
+	}
+	renderFrom := max(0, first-renderAheadEntries)
+	renderTo := min(len(m.history), last+renderAheadEntries)
+	for i := renderFrom; i < renderTo; i++ {
+		m.ensureEntryWrapped(i, contentW)
+	}
+	// After wrapping, refresh totals and re-clamp the visible window
+	// (the wrap may have changed the actual line count for visited
+	// entries vs. their pre-wrap estimate).
+	m.refreshChatTotals()
+	if m.chat.YOffset() > m.chat.MaxYOffset() {
+		m.chat.SetYOffset(m.chat.MaxYOffset())
+	}
+	first, last = m.chatVisibleRange()
+	if first == -1 {
+		return m.blankChatFrame(contentH)
+	}
+
+	yStart := m.chat.YOffset()
+	yEnd := yStart + contentH
+	lines := make([]string, 0, contentH)
+	row := 0
+	for i := 0; i < first; i++ {
+		row += m.estimateEntryLines(i)
+		if i < len(m.history)-1 {
+			row++
+		}
+	}
+	for i := first; i < last && len(lines) < contentH; i++ {
+		entryLines := m.history[i].wrapped
+		if entryLines == nil {
+			// ensureEntryWrapped populates this for every visible idx
+			// at non-degenerate widths; the fallback is the raw text.
+			entryLines = []string{m.history[i].text}
+		}
+		entryEnd := row + len(entryLines)
+		offset := max(0, yStart-row)
+		end := len(entryLines)
+		if entryEnd > yEnd {
+			end = yEnd - row
+		}
+		if offset < end {
+			lines = append(lines, entryLines[offset:end]...)
+		}
+		row = entryEnd
+		if i < len(m.history)-1 {
+			if row >= yStart && row < yEnd && len(lines) < contentH {
+				lines = append(lines, "")
+			}
+			row++
+		}
+	}
+	for len(lines) < contentH {
+		lines = append(lines, "")
+	}
+	if len(lines) > contentH {
+		lines = lines[:contentH]
+	}
+	body := lipgloss.NewStyle().
+		Width(contentW).
+		Render(strings.Join(lines, "\n"))
+	return m.chat.style.UnsetWidth().UnsetHeight().Render(body)
+}
+
+// blankChatFrame returns a contentH-row blank canvas wrapped in the
+// chatView's style. Used by the early-return paths in viewportContent
+// when the chat has no rows to draw (degenerate width/height, empty
+// history, or scroll past the end after a clear).
+func (m *model) blankChatFrame(contentH int) string {
+	return m.chat.style.Render(strings.Repeat("\n", max(0, contentH-1)))
 }
 
 func (m model) spinnerLine() string {
@@ -218,23 +485,6 @@ func (m model) renderResponse(raw string) string {
 		return outputStyle.Render(raw)
 	}
 	return outputStyle.Render(strings.Trim(rendered, "\n"))
-}
-
-func (m model) renderUserBar(text string) string {
-	w := m.width - 8
-	if w < 20 {
-		w = 20
-	}
-	return userBarStyle.Width(w).Render(text)
-}
-
-func (m model) renderEntry(e historyEntry) string {
-	switch e.kind {
-	case histResponse, histUser:
-		return e.rendered
-	default:
-		return e.text
-	}
 }
 
 func (m *model) appendHistory(entry string) {
@@ -541,8 +791,8 @@ func (m model) View() tea.View {
 }
 
 func (m *model) scrollViewportTo(y int) {
-	vpH := m.viewport.Height()
-	total := m.viewport.TotalLineCount()
+	vpH := m.chat.Height()
+	total := m.chat.TotalLineCount()
 	if vpH <= 1 || total <= vpH {
 		return
 	}
@@ -553,7 +803,8 @@ func (m *model) scrollViewportTo(y int) {
 		y = vpH - 1
 	}
 	pct := float64(y) / float64(vpH-1)
-	m.viewport.SetYOffset(int(pct * float64(total-vpH)))
+	m.chat.SetYOffset(int(pct * float64(total-vpH)))
+	m.lastContentFP = ""
 }
 
 func trimTrailingSpaces(s string) string {
@@ -570,9 +821,9 @@ func (m model) viewportWithScrollbar() string {
 		return m.buildViewportWithScrollbar()
 	}
 	fp := fmt.Sprintf("%d|%d|%d|%s|%t|%s",
-		m.viewport.Width(),
-		m.viewport.Height(),
-		m.viewport.YOffset(),
+		m.chat.Width(),
+		m.chat.Height(),
+		m.chat.YOffset(),
 		m.lastContentFP,
 		m.mode == modeInput,
 		m.selectionFingerprint())
@@ -593,10 +844,10 @@ func (m model) viewportWithScrollbar() string {
 
 func (m model) buildViewportWithScrollbar() string {
 	vpView := m.applySelectionHighlight(m.cachedViewportView())
-	if m.mode != modeInput || m.viewport.TotalLineCount() <= m.viewport.Height() {
+	if m.mode != modeInput || m.chat.TotalLineCount() <= m.chat.Height() {
 		return vpView
 	}
-	bar := scrollbarChars(m.viewport)
+	bar := scrollbarChars(m.chat)
 	if len(bar) == 0 {
 		return vpView
 	}
@@ -624,10 +875,10 @@ func (m model) applySelectionHighlight(vpView string) string {
 	if _, ok := m.selectionRange(); !ok {
 		return vpView
 	}
-	frameTop := m.viewport.Style.GetPaddingTop() +
-		m.viewport.Style.GetMarginTop() +
-		m.viewport.Style.GetBorderTopSize()
-	yOffset := m.viewport.YOffset()
+	frameTop := m.chat.style.GetPaddingTop() +
+		m.chat.style.GetMarginTop() +
+		m.chat.style.GetBorderTopSize()
+	yOffset := m.chat.YOffset()
 	style := selectionStyle()
 	ranges := m.entryRowRanges()
 	lines := strings.Split(vpView, "\n")
@@ -646,7 +897,7 @@ func (m model) applySelectionHighlight(vpView string) string {
 	return strings.Join(lines, "\n")
 }
 
-func scrollbarChars(vp viewport.Model) []string {
+func scrollbarChars(vp chatView) []string {
 	height := vp.Height()
 	if height <= 0 {
 		return nil
@@ -682,14 +933,17 @@ func scrollbarChars(vp viewport.Model) []string {
 	return out
 }
 
+// cachedViewportView memoises the lazy chat-view render for the
+// current width/height/yOffset/content fingerprint. Spinner ticks and
+// other no-op redraws hit the cache and skip the wrap pass entirely.
 func (m model) cachedViewportView() string {
 	if m.fc == nil {
-		return m.viewport.View()
+		return m.viewportContent()
 	}
 	fp := fmt.Sprintf("%d|%d|%d|%s",
-		m.viewport.Width(),
-		m.viewport.Height(),
-		m.viewport.YOffset(),
+		m.chat.Width(),
+		m.chat.Height(),
+		m.chat.YOffset(),
 		m.lastContentFP)
 	if m.fc.vpFP == fp {
 		if debugOn {
@@ -698,7 +952,7 @@ func (m model) cachedViewportView() string {
 		return m.fc.vpView
 	}
 	vs := time.Now()
-	m.fc.vpView = m.viewport.View()
+	m.fc.vpView = m.viewportContent()
 	m.fc.vpFP = fp
 	if debugOn {
 		debugTrace("  viewport.View (miss)", vs)

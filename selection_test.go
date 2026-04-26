@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -116,59 +117,157 @@ func TestEntryRowRanges_TracksHeightsWithSeparator(t *testing.T) {
 }
 
 func TestBuildCopyText_FullEntrySelection(t *testing.T) {
+	// Selection across two entries (and the blank separator between
+	// them) copies the visible glyphs of both entries verbatim, with a
+	// blank line preserving the on-screen separator. Production
+	// outputStyle bakes a 5-col MarginLeft into rendered text, so the
+	// fixture mirrors that layout.
 	m := newTestModel(t, newFakeProvider())
 	m.history = []historyEntry{
-		{kind: histUser, text: "user input", rendered: "▎ user input"},
-		{kind: histResponse, text: "## hello\nbody line", rendered: "rendered\nlines\nhere"},
+		{kind: histResponse, text: "first", rendered: "     first"},
+		{kind: histResponse, text: "second", rendered: "     second"},
 	}
-	// Select rows 0..3 — covers both entries' rendered ranges.
+	// Ranges: entry0 [0,1), separator at row 1, entry1 [2,3).
 	m.selActive = true
 	m.selAnchor = cellPos{row: 0, col: 0}
-	m.selFocus = cellPos{row: 5, col: 0}
+	m.selFocus = cellPos{row: 2, col: 10}
 	got := m.buildCopyText()
-	want := "user input\n\n## hello\nbody line"
+	want := "first\n\nsecond"
 	if got != want {
 		t.Errorf("buildCopyText:\n got %q\nwant %q", got, want)
 	}
 }
 
-func TestBuildCopyText_PartialSelectionUsesFullEntryBuffer(t *testing.T) {
-	// Acceptance: even a partial intra-entry selection copies that
-	// entry's full e.text — never the rendered slice — so soft-wrap
-	// newlines don't leak into the clipboard.
+func TestBuildCopyText_PartialSelectionCopiesOnlySelectedGlyphs(t *testing.T) {
+	// Acceptance: a partial intra-entry selection copies only the
+	// glyphs the user actually highlighted on screen, not the full
+	// buffer. Inter-row middles span the entire wrapped line per
+	// terminal block-selection semantics.
 	m := newTestModel(t, newFakeProvider())
-	source := "a single source paragraph with no hard newlines\nbut a second source line"
 	m.history = []historyEntry{
-		{kind: histResponse, text: source, rendered: "wrap1\nwrap2\nwrap3\nwrap4"},
+		{
+			kind:       histResponse,
+			text:       "raw markdown source",
+			rendered:   "     wrap1\n     wrap2\n     wrap3\n     wrap4",
+			wrapped:    []string{"     wrap1", "     wrap2", "     wrap3", "     wrap4"},
+			wrappedFor: 80,
+		},
 	}
+	// Select from row 1 col 7 to row 2 col 8. First row from col 7
+	// (post-margin "ap2") to end of line, last row from col 5
+	// (post-margin) to col 8 inclusive ("wrap").
 	m.selActive = true
-	m.selAnchor = cellPos{row: 1, col: 2}
-	m.selFocus = cellPos{row: 2, col: 5}
+	m.selAnchor = cellPos{row: 1, col: 7}
+	m.selFocus = cellPos{row: 2, col: 8}
 	got := m.buildCopyText()
-	if got != source {
-		t.Errorf("partial selection should copy full e.text:\n got %q\nwant %q", got, source)
-	}
-	if strings.Count(got, "\n") != 1 {
-		t.Errorf("buffer-text copy should preserve only the source's single \\n, got %d newlines", strings.Count(got, "\n"))
+	want := "ap2\nwrap"
+	if got != want {
+		t.Errorf("partial selection should copy only selected glyphs:\n got %q\nwant %q", got, want)
 	}
 }
 
 func TestBuildCopyText_OnlySelectedEntries(t *testing.T) {
+	// Selection inside a single entry copies only that entry's visible
+	// text. Three entries; user selects all of the middle entry's row.
 	m := newTestModel(t, newFakeProvider())
 	m.history = []historyEntry{
-		{kind: histUser, text: "first", rendered: "▎ first"},
-		{kind: histUser, text: "second", rendered: "▎ second"},
-		{kind: histUser, text: "third", rendered: "▎ third"},
+		{kind: histResponse, text: "first", rendered: "     first"},
+		{kind: histResponse, text: "second", rendered: "     second"},
+		{kind: histResponse, text: "third", rendered: "     third"},
 	}
-	// Each entry occupies row N*2 (1 row of content + 1 separator). So
-	// rows: first=[0,1), second=[2,3), third=[4,5). Select rows 2..3:
-	// only the middle entry should be copied.
+	// Each entry: 1 row of content + 1 separator.
+	// Rows: first=[0,1), sep=1, second=[2,3), sep=3, third=[4,5).
 	m.selActive = true
 	m.selAnchor = cellPos{row: 2, col: 0}
-	m.selFocus = cellPos{row: 2, col: 4}
+	m.selFocus = cellPos{row: 2, col: 10}
 	got := m.buildCopyText()
 	if got != "second" {
-		t.Errorf("expected only middle entry, got %q", got)
+		t.Errorf("expected middle entry's visible text, got %q", got)
+	}
+}
+
+func TestBuildCopyText_StripsAnsiEscapes(t *testing.T) {
+	// Acceptance: ANSI escapes from glamour styling never leak into
+	// the clipboard payload — the output is the bare visible text.
+	m := newTestModel(t, newFakeProvider())
+	m.history = []historyEntry{
+		{
+			kind:       histResponse,
+			text:       "**hello**",
+			rendered:   "     \x1b[1mhello\x1b[0m",
+			wrapped:    []string{"     \x1b[1mhello\x1b[0m"},
+			wrappedFor: 80,
+		},
+	}
+	m.selActive = true
+	m.selAnchor = cellPos{row: 0, col: 0}
+	m.selFocus = cellPos{row: 0, col: 9}
+	got := m.buildCopyText()
+	if strings.Contains(got, "\x1b[") {
+		t.Errorf("copy text must not contain ANSI escapes; got %q", got)
+	}
+	if got != "hello" {
+		t.Errorf("got %q, want \"hello\"", got)
+	}
+}
+
+func TestBuildCopyText_LeftMarginSkippedAcrossEntryKinds(t *testing.T) {
+	// Acceptance: the 5-column left gutter (outputStyle.MarginLeft for
+	// histResponse / histPrerendered, the indent + │ + padding for the
+	// userBar) is never part of the clipboard payload regardless of
+	// entry kind.
+	cases := []struct {
+		name     string
+		kind     historyKind
+		rendered string
+		anchor   cellPos
+		focus    cellPos
+		want     string
+	}{
+		{
+			name:     "histUser bar gutter",
+			kind:     histUser,
+			rendered: "   │ hello world",
+			anchor:   cellPos{row: 0, col: 0},
+			focus:    cellPos{row: 0, col: 15},
+			want:     "hello world",
+		},
+		{
+			name:     "histResponse left margin",
+			kind:     histResponse,
+			rendered: "     response body",
+			anchor:   cellPos{row: 0, col: 0},
+			focus:    cellPos{row: 0, col: 17},
+			want:     "response body",
+		},
+		{
+			name:     "histPrerendered left margin",
+			kind:     histPrerendered,
+			rendered: "     tool output line",
+			anchor:   cellPos{row: 0, col: 0},
+			focus:    cellPos{row: 0, col: 20},
+			want:     "tool output line",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := newTestModel(t, newFakeProvider())
+			m.history = []historyEntry{
+				{
+					kind:       c.kind,
+					text:       c.want,
+					rendered:   c.rendered,
+					wrapped:    []string{c.rendered},
+					wrappedFor: 80,
+				},
+			}
+			m.selActive = true
+			m.selAnchor = c.anchor
+			m.selFocus = c.focus
+			if got := m.buildCopyText(); got != c.want {
+				t.Errorf("got %q, want %q", got, c.want)
+			}
+		})
 	}
 }
 
@@ -202,8 +301,8 @@ func TestSelectionRenderMask_UserBarMarginNeverHighlighted(t *testing.T) {
 	if !ok {
 		t.Fatal("expected mask on user-bar row to clamp, not vanish")
 	}
-	if start != userBarMarginCols {
-		t.Errorf("start=%d want %d (user-bar margin must be skipped)", start, userBarMarginCols)
+	if start != chatLeftMarginCols {
+		t.Errorf("start=%d want %d (user-bar margin must be skipped)", start, chatLeftMarginCols)
 	}
 	if end != 13 {
 		t.Errorf("end=%d want 13 (maxCol+1)", end)
@@ -226,37 +325,44 @@ func TestSelectionRenderMask_UserBarFullyClampedReturnsFalse(t *testing.T) {
 	}
 }
 
-func TestSelectionRenderMask_NonUserBarRowsKeepCol0(t *testing.T) {
+func TestSelectionRenderMask_AllRowsClampToLeftMargin(t *testing.T) {
+	// All entry kinds share a 5-col left gutter, so the highlight mask
+	// always starts at chatLeftMarginCols regardless of kind.
 	m := newTestModel(t, newFakeProvider())
 	m.history = []historyEntry{
-		{kind: histResponse, text: "resp", rendered: "response text"},
+		{kind: histResponse, text: "resp", rendered: "     response text"},
 	}
 	m.selActive = true
 	m.selAnchor = cellPos{row: 0, col: 0}
-	m.selFocus = cellPos{row: 0, col: 5}
-	start, _, ok := m.selectionRenderMask(0, 13, nil)
+	m.selFocus = cellPos{row: 0, col: 17}
+	start, end, ok := m.selectionRenderMask(0, 18, nil)
 	if !ok {
 		t.Fatal("expected a mask")
 	}
-	if start != 0 {
-		t.Errorf("non-user rows should highlight from col 0; got %d", start)
+	if start != chatLeftMarginCols {
+		t.Errorf("non-user rows must clamp to chatLeftMarginCols; got start=%d", start)
+	}
+	if end != 18 {
+		t.Errorf("end=%d want 18 (maxCol+1)", end)
 	}
 }
 
-func TestSelectionRenderMask_MultiRowMiddleRowSpansFullLine(t *testing.T) {
+func TestSelectionRenderMask_MultiRowMiddleRowSpansPostMargin(t *testing.T) {
+	// Middle rows of a multi-row selection span [chatLeftMarginCols,
+	// lineWidth) — left margin is always reserved.
 	m := newTestModel(t, newFakeProvider())
 	m.history = []historyEntry{
-		{kind: histResponse, text: "x", rendered: "row0\nrow1\nrow2"},
+		{kind: histResponse, text: "x", rendered: "     row0\n     row1\n     row2"},
 	}
 	m.selActive = true
 	m.selAnchor = cellPos{row: 0, col: 2}
-	m.selFocus = cellPos{row: 2, col: 1}
-	start, end, ok := m.selectionRenderMask(1, 4, nil)
+	m.selFocus = cellPos{row: 2, col: 6}
+	start, end, ok := m.selectionRenderMask(1, 9, nil)
 	if !ok {
 		t.Fatal("middle row should be selected")
 	}
-	if start != 0 || end != 4 {
-		t.Errorf("middle row mask=[%d,%d) want [0,4)", start, end)
+	if start != chatLeftMarginCols || end != 9 {
+		t.Errorf("middle row mask=[%d,%d) want [%d,9)", start, end, chatLeftMarginCols)
 	}
 }
 
@@ -271,24 +377,26 @@ func TestApplySelectionHighlight_NoSelectionReturnsInputUnchanged(t *testing.T) 
 func TestApplySelectionHighlight_AddsAnsiOnSelectedCells(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.history = []historyEntry{
-		{kind: histResponse, text: "hello world", rendered: "hello world"},
+		{kind: histResponse, text: "hello world", rendered: "     hello world"},
 	}
+	// Select cols 5..10 (post-margin "hello") so the mask isn't fully
+	// clamped away.
 	m.selActive = true
-	m.selAnchor = cellPos{row: 0, col: 0}
-	m.selFocus = cellPos{row: 0, col: 4}
-	out := m.applySelectionHighlight("hello world")
+	m.selAnchor = cellPos{row: 0, col: 5}
+	m.selFocus = cellPos{row: 0, col: 9}
+	out := m.applySelectionHighlight("     hello world")
 	if !strings.Contains(out, "\x1b[") {
 		t.Errorf("expected ANSI escape in highlighted output, got %q", out)
 	}
-	if out == "hello world" {
+	if out == "     hello world" {
 		t.Errorf("highlighted output should differ from input")
 	}
 }
 
 func TestUpdateMouseLeftClick_StartsSelection(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
-	m.viewport.SetWidth(80)
-	m.viewport.SetHeight(20)
+	m.chat.SetWidth(80)
+	m.chat.SetHeight(20)
 	m2, _ := runUpdate(t, m, tea.MouseClickMsg{X: 10, Y: 5, Button: tea.MouseLeft})
 	if !m2.selDragging {
 		t.Errorf("left click in viewport should set selDragging")
@@ -307,9 +415,12 @@ func TestUpdateMouseLeftClick_ScrollbarUnaffected(t *testing.T) {
 	// height starts scrollbarDragging and never starts a text selection.
 	m := newTestModel(t, newFakeProvider())
 	m.width = 40
-	m.viewport.SetWidth(39)
-	m.viewport.SetHeight(5)
-	m.viewport.SetContent(strings.Repeat("line\n", 100))
+	m.chat.SetWidth(39)
+	m.chat.SetHeight(5)
+	for i := 0; i < 100; i++ {
+		m.appendHistory("line " + strconv.Itoa(i))
+	}
+	(&m).layout()
 	msg := tea.MouseClickMsg{X: m.width - 1, Y: 2, Button: tea.MouseLeft}
 	m2, _ := runUpdate(t, m, msg)
 	if !m2.scrollbarDragging {
@@ -323,8 +434,8 @@ func TestUpdateMouseLeftClick_ScrollbarUnaffected(t *testing.T) {
 func TestUpdateMouseMotion_UpdatesSelectionFocus(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.width = 80
-	m.viewport.SetWidth(80)
-	m.viewport.SetHeight(20)
+	m.chat.SetWidth(80)
+	m.chat.SetHeight(20)
 	m.selDragging = true
 	m.selAnchor = cellPos{row: 1, col: 3}
 	m.selFocus = cellPos{row: 1, col: 3}
@@ -375,11 +486,11 @@ func TestUpdateMouseRightClick_WithSelectionCopiesAndClears(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.toast = NewToastModel(40, time.Second)
 	m.history = []historyEntry{
-		{kind: histResponse, text: "buffer source", rendered: "buffer source"},
+		{kind: histResponse, text: "buffer source", rendered: "     buffer source"},
 	}
 	m.selActive = true
 	m.selAnchor = cellPos{row: 0, col: 0}
-	m.selFocus = cellPos{row: 0, col: 5}
+	m.selFocus = cellPos{row: 0, col: 10}
 
 	var copied string
 	withClipboardStubs(t, "linux",
@@ -401,8 +512,9 @@ func TestUpdateMouseRightClick_WithSelectionCopiesAndClears(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected toastShowMsg, got %T", msg)
 	}
-	if copied != "buffer source" {
-		t.Errorf("clipboard payload=%q want buffer source", copied)
+	// Cols 0..10 of "     buffer source", clamped to [5,11) = "buffer".
+	if copied != "buffer" {
+		t.Errorf("clipboard payload=%q want \"buffer\" (post-margin cols 5..10)", copied)
 	}
 	if !strings.Contains(tmsg.text, "copied") {
 		t.Errorf("toast text=%q should announce success", tmsg.text)
@@ -413,11 +525,11 @@ func TestCopySelectionAndClear_ClipboardErrorSurfacesToast(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.toast = NewToastModel(40, time.Second)
 	m.history = []historyEntry{
-		{kind: histResponse, text: "x", rendered: "x"},
+		{kind: histResponse, text: "xy", rendered: "     xy"},
 	}
 	m.selActive = true
-	m.selAnchor = cellPos{row: 0, col: 0}
-	m.selFocus = cellPos{row: 0, col: 1}
+	m.selAnchor = cellPos{row: 0, col: 5}
+	m.selFocus = cellPos{row: 0, col: 6}
 
 	withClipboardStubs(t, "linux",
 		map[string]bool{"wl-copy": true},
@@ -461,18 +573,27 @@ func TestSelectionFingerprint_ChangesWithBounds(t *testing.T) {
 
 func TestScreenToContentCell_AddsViewportYOffset(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
-	// Force the viewport into a scrolled state by giving it enough
-	// content. We use raw lines because newTestModel's viewport has
-	// height 0 unless we push content through it.
-	m.viewport.SetWidth(40)
-	m.viewport.SetHeight(5)
-	m.viewport.SetContent(strings.Repeat("line\n", 100))
-	m.viewport.SetYOffset(7)
+	// Push enough content through the chat view to allow a non-zero
+	// scroll offset, then move it explicitly.
+	m.chat.SetWidth(40)
+	m.chat.SetHeight(5)
+	for i := 0; i < 100; i++ {
+		m.appendHistory("line " + strconv.Itoa(i))
+	}
+	(&m).layout()
+	m.chat.SetYOffset(7)
 	cell := m.screenToContentCell(3, 2)
 	if cell.col != 3 {
 		t.Errorf("col passes through unchanged, got %d", cell.col)
 	}
-	if cell.row != 9 {
-		t.Errorf("row should be screenY+YOffset=2+7=9, got %d", cell.row)
+	wantRow := 2 + m.chat.YOffset() - m.chat.style.GetPaddingTop() -
+		m.chat.style.GetMarginTop() - m.chat.style.GetBorderTopSize()
+	if wantRow < m.chat.YOffset() {
+		// frame top would push contentY below 0; clamp matches the
+		// behaviour of screenToContentCell's max(0, ...) guard.
+		wantRow = m.chat.YOffset()
+	}
+	if cell.row != wantRow {
+		t.Errorf("row should be screenY+YOffset less frame top = %d, got %d", wantRow, cell.row)
 	}
 }

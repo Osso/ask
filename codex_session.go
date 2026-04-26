@@ -257,7 +257,7 @@ func loadCodexHistory(sessionID string, opts HistoryOpts) ([]historyEntry, error
 			case "assistant":
 				if opts.QuietMode && lastAssistantIdx >= 0 {
 					entries[lastAssistantIdx].text = txt
-					entries[lastAssistantIdx].rendered = ""
+					invalidateEntryRender(&entries[lastAssistantIdx])
 					continue
 				}
 				entries = append(entries, historyEntry{kind: histResponse, text: txt})

@@ -193,7 +193,7 @@ func loadClaudeHistory(sessionID string, opts HistoryOpts) ([]historyEntry, erro
 			}
 			if opts.QuietMode && lastAssistantIdx >= 0 {
 				entries[lastAssistantIdx].text = b.String()
-				entries[lastAssistantIdx].rendered = ""
+				invalidateEntryRender(&entries[lastAssistantIdx])
 				continue
 			}
 			entries = append(entries, historyEntry{

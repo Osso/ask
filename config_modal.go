@@ -316,13 +316,27 @@ func (m model) closeThemePicker() model {
 	return m
 }
 
+// invalidateThemedRender drops every entry's cached glamour/wrap output
+// so the next layout pass re-renders with the freshly-applied theme.
+// We touch every entry up front (rather than letting the chatView's
+// lazy path catch them on scroll) because a theme change *must* affect
+// the visible window immediately, not just future scroll positions.
+// The actual glamour cost is still paid lazily — only entries that the
+// chatView wraps in its visible+pad band are rendered; off-screen
+// entries simply re-render the next time they scroll into view.
+//
+// m.renderer is also dropped here because the glamour renderer bakes
+// the theme into its style at construction; the next ensureEntryWrapped
+// pass will rebuild it at the chat's content width.
 func (m *model) invalidateThemedRender() {
 	for i := range m.history {
 		switch m.history[i].kind {
 		case histResponse, histUser:
-			m.history[i].rendered = ""
+			invalidateEntryRender(&m.history[i])
 		}
 	}
+	m.renderer = nil
+	m.rendererWidth = 0
 	m.lastContentFP = ""
 	m.fc = &frameCache{}
 }
@@ -335,11 +349,6 @@ func (m model) previewTheme(idx int) model {
 	m.configThemeCursor = idx
 	m.themeName = t.name
 	applyTheme(t)
-	w := m.width
-	if w <= 0 {
-		w = 100
-	}
-	m.renderer = newRenderer(w)
 	(&m).invalidateThemedRender()
 	return m
 }

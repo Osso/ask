@@ -9,7 +9,6 @@ import (
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
 )
@@ -71,11 +70,9 @@ func newTab(id int, cfg askConfig) (*model, error) {
 
 	renderer := newRenderer(100)
 
-	vp := viewport.New()
-	vp.Style = lipgloss.NewStyle().PaddingTop(1)
-	vp.FillHeight = true
-	vp.SoftWrap = true
-	vp.MouseWheelEnabled = true
+	vp := newChatView()
+	vp.style = lipgloss.NewStyle().PaddingTop(1)
+	vp.mouseWheelEnabled = true
 
 	cwd, _ := os.Getwd()
 
@@ -103,7 +100,7 @@ func newTab(id int, cfg askConfig) (*model, error) {
 		provider:           provider,
 		mode:               modeInput,
 		input:              ta,
-		viewport:           vp,
+		chat:               vp,
 		spinner:            sp,
 		renderer:           renderer,
 		width:              100,

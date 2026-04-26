@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	xansi "github.com/charmbracelet/x/ansi"
 )
 
 // cellPos points at a cell in the *content* coordinate system of the
@@ -17,19 +18,19 @@ type cellPos struct {
 	row, col int
 }
 
-// userBarMarginCols is the first column where actual user-message text
-// lives. userBarStyle wraps the message with MarginLeft(3) +
-// left-border + PaddingLeft(1), which lays out as:
+// chatLeftMarginCols is the first column where actual entry content
+// lives. Every entry kind shares the same 5-column left margin:
 //
-//	col 0..2 : MarginLeft spaces
-//	col 3    : │ border character
-//	col 4    : PaddingLeft space
-//	col 5+   : text
+//   - userBarStyle: MarginLeft(3) + left border + PaddingLeft(1) →
+//     cols 0..2 are spaces, col 3 is the │ border, col 4 is the
+//     padding space, col 5+ is the user text.
+//   - outputStyle (every other kind: histResponse, histPrerendered):
+//     MarginLeft(5) → cols 0..4 are spaces, col 5+ is the text.
 //
-// The selection renderer suppresses highlight on cols < this value so
-// the | bar, the indentation, and the padding gap never appear
-// highlighted (acceptance criterion 1).
-const userBarMarginCols = 5
+// The selection renderer suppresses highlight (and copy) on cols
+// < this value so the indent / bar / padding gutter never appears
+// highlighted, regardless of entry kind.
+const chatLeftMarginCols = 5
 
 // selectionBounds is the normalized rectangle for a live or finalized
 // selection, expressed as inclusive content cells.
@@ -89,55 +90,96 @@ func (m model) selectionContains(row, col int) bool {
 // to map a selection (in content rows) back to history entries when
 // building the clipboard payload.
 //
-// The viewport content is rebuilt by viewportContent() which joins
-// entries with "\n\n", so each entry contributes lipgloss.Height(rendered)
-// rows followed by exactly one blank separator row (except the last
-// entry). entryRowRanges mirrors that layout.
+// The chatView lays out entries by joining wrapped lines with one
+// blank separator row between consecutive entries; entryRowRanges
+// mirrors that layout. It prefers the per-entry wrap cache (exact for
+// the current width) and falls back to lipgloss.Height(rendered) for
+// entries that have never been wrapped — so a copy issued before the
+// first View() lands still produces correct ranges, just at the
+// pre-wrap line count.
 func (m model) entryRowRanges() [][2]int {
 	out := make([][2]int, len(m.history))
 	row := 0
 	for i := range m.history {
-		var rendered string
-		switch m.history[i].kind {
-		case histResponse, histUser:
-			rendered = m.history[i].rendered
+		h := 1
+		switch {
+		case m.history[i].wrapped != nil:
+			h = max(1, len(m.history[i].wrapped))
+		default:
+			rendered := m.history[i].rendered
 			if rendered == "" {
-				// renderEntry never returns empty for these kinds
-				// when the lazy render has run, but we still need to
-				// produce *some* count for unrendered rows so a copy
-				// before first View() doesn't crash.
 				rendered = m.history[i].text
 			}
-		default:
-			rendered = m.history[i].text
+			h = max(1, lipgloss.Height(rendered))
 		}
-		h := max(1, lipgloss.Height(rendered))
 		out[i] = [2]int{row, row + h}
-		row += h + 1 // +1 for the "\n\n" separator
+		row += h + 1 // +1 for the blank separator row
 	}
 	return out
 }
 
 // buildCopyText assembles the clipboard payload for the current
-// selection: every history entry whose row range intersects the
-// selection contributes its full e.text (the buffer), joined by
-// "\n\n". This deliberately ignores partial intra-entry selections —
-// using the buffer guarantees no soft-wrap newlines leak in and
-// satisfies the "respect buffer newlines" acceptance criterion.
+// selection: it walks every selected content row, slices each row to
+// the selected column range using selectionRenderMask (which knows
+// about user-bar margins and terminal block-selection rules), strips
+// ANSI escapes, and joins the rows with newlines. The output matches
+// what the user actually highlighted on screen — partial intra-entry
+// selections only copy the selected glyphs.
+//
+// Separator rows between entries copy as empty lines, preserving the
+// blank-line gap the user sees on screen. Rows that fall outside any
+// rendered entry (degenerate selection past the end of history) also
+// copy as empty lines so the line count of the payload matches the
+// selection rectangle's height.
 func (m model) buildCopyText() string {
 	b, ok := m.selectionRange()
 	if !ok {
 		return ""
 	}
 	ranges := m.entryRowRanges()
-	var parts []string
-	for i, r := range ranges {
-		if r[1] <= b.minRow || r[0] > b.maxRow {
+	rows := make([]string, 0, b.maxRow-b.minRow+1)
+	for r := b.minRow; r <= b.maxRow; r++ {
+		line, inEntry := m.lineAtContentRow(r, ranges)
+		if !inEntry {
+			rows = append(rows, "")
 			continue
 		}
-		parts = append(parts, m.history[i].text)
+		start, end, ok := m.selectionRenderMask(r, lipgloss.Width(line), ranges)
+		if !ok {
+			rows = append(rows, "")
+			continue
+		}
+		rows = append(rows, xansi.Strip(xansi.Cut(line, start, end)))
 	}
-	return strings.Join(parts, "\n\n")
+	return strings.Join(rows, "\n")
+}
+
+// lineAtContentRow returns the rendered line at chat-content row r and
+// whether the row sits inside a real entry (false for the blank
+// separator between consecutive entries, or for rows past the end of
+// history). Falls back to entry.rendered/text when the wrap cache is
+// not yet populated so the copy path stays correct in test scenarios
+// that bypass viewportContent.
+func (m model) lineAtContentRow(r int, ranges [][2]int) (string, bool) {
+	for i, rr := range ranges {
+		if r < rr[0] || r >= rr[1] {
+			continue
+		}
+		j := r - rr[0]
+		if w := m.history[i].wrapped; w != nil && j < len(w) {
+			return w[j], true
+		}
+		src := m.history[i].rendered
+		if src == "" {
+			src = m.history[i].text
+		}
+		lines := strings.Split(src, "\n")
+		if j < len(lines) {
+			return lines[j], true
+		}
+		return "", true
+	}
+	return "", false
 }
 
 // clearSelection drops both the live drag and any finalized selection
@@ -185,19 +227,6 @@ func copyTextCmd(t *toastModel, text string) tea.Cmd {
 	}
 }
 
-// entryKindAt reads the history-entry kind covering contentRow off a
-// precomputed ranges slice. Returns histPrerendered when the row is
-// past the end of history (trailing blanks in a partially filled
-// viewport).
-func entryKindAt(history []historyEntry, ranges [][2]int, contentRow int) historyKind {
-	for i, r := range ranges {
-		if contentRow >= r[0] && contentRow < r[1] {
-			return history[i].kind
-		}
-	}
-	return histPrerendered
-}
-
 // selectionRenderMask returns the inclusive-start / exclusive-end
 // column range to paint with the selection background on a given
 // content row. The mask handles three concerns in one place so the
@@ -205,19 +234,21 @@ func entryKindAt(history []historyEntry, ranges [][2]int, contentRow int) histor
 //
 //   - terminal block-selection semantics (first row from minCol, last
 //     row up to maxCol, middle rows full width)
-//   - user-bar margin suppression — cols 0..userBarMarginCols-1 on
-//     histUser rows never get highlighted so the | bar and its left
-//     margin stay clean
+//   - left-margin suppression — cols 0..chatLeftMarginCols-1 never get
+//     highlighted (the indent / user-bar gutter is decoration, not
+//     content, regardless of entry kind)
 //   - clamping to the actual line width so the highlight never extends
 //     into trailing blank cells
 //
-// ranges may be nil; the helper falls back to entryRowRanges() then.
-// Pass a precomputed slice from applySelectionHighlight to avoid
-// re-walking history on every line.
+// ranges is unused today (the margin clamp no longer depends on entry
+// kind) but kept in the signature so the highlight loop can pass its
+// precomputed slice without an extra allocation if entry-aware logic
+// ever comes back.
 //
 // ok=false means there's nothing to paint on this row (no selection,
-// row outside selection range, or fully clamped by the user-bar margin).
+// row outside selection range, or fully clamped by the left margin).
 func (m model) selectionRenderMask(contentRow, lineWidth int, ranges [][2]int) (start, end int, ok bool) {
+	_ = ranges
 	b, hasRange := m.selectionRange()
 	if !hasRange {
 		return 0, 0, false
@@ -240,15 +271,7 @@ func (m model) selectionRenderMask(contentRow, lineWidth int, ranges [][2]int) (
 		end = lineWidth
 	}
 	end = min(end, lineWidth)
-	if end <= start {
-		return 0, 0, false
-	}
-	if ranges == nil {
-		ranges = m.entryRowRanges()
-	}
-	if entryKindAt(m.history, ranges, contentRow) == histUser {
-		start = max(start, userBarMarginCols)
-	}
+	start = max(start, chatLeftMarginCols)
 	if end <= start {
 		return 0, 0, false
 	}
@@ -290,9 +313,9 @@ func (m model) selectionFingerprint() string {
 // rather than scrolling negative. Caller is responsible for confirming
 // the click is inside the viewport's screen footprint before calling.
 func (m model) screenToContentCell(screenX, screenY int) cellPos {
-	frameTop := m.viewport.Style.GetPaddingTop() +
-		m.viewport.Style.GetMarginTop() +
-		m.viewport.Style.GetBorderTopSize()
+	frameTop := m.chat.style.GetPaddingTop() +
+		m.chat.style.GetMarginTop() +
+		m.chat.style.GetBorderTopSize()
 	contentY := max(0, screenY-frameTop)
-	return cellPos{row: contentY + m.viewport.YOffset(), col: screenX}
+	return cellPos{row: contentY + m.chat.YOffset(), col: screenX}
 }
