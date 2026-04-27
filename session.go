@@ -48,6 +48,14 @@ func claudeSessionPath(sessionID string, cwd string) (string, error) {
 // `/foo/ask/.claude/worktrees/bar` becomes
 // `-foo-ask--claude-worktrees-bar`. We rely on that literal prefix to
 // find siblings and reconstruct the worktree path from the remainder.
+//
+// Symlink handling: when the cwd is reachable through a symlink chain
+// (e.g. `/home/osso/Projects` → `/syncthing/Sync/Projects`), claude
+// itself usually encodes the canonical form (because it calls
+// getcwd(2) without trusting $PWD), but ask's own `os.Getwd` may
+// return either form depending on whether $PWD is set. To make
+// resume robust against that mismatch we also expand candidate dirs
+// for the symlink-resolved cwd when it differs.
 func claudeCandidateSessionDirs(cwd string) ([]sessionDir, error) {
 	if cwd == "" {
 		c, err := os.Getwd()
@@ -61,25 +69,38 @@ func claudeCandidateSessionDirs(cwd string) ([]sessionDir, error) {
 		return nil, err
 	}
 	base := filepath.Join(home, ".claude", "projects")
-	mainName := strings.ReplaceAll(cwd, "/", "-")
-	dirs := []sessionDir{{dir: filepath.Join(base, mainName), cwd: cwd}}
-	prefix := mainName + "--claude-worktrees-"
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return dirs, nil
+	cwds := []string{cwd}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil && resolved != cwd {
+		cwds = append(cwds, resolved)
 	}
-	for _, e := range entries {
-		if !e.IsDir() {
+	var dirs []sessionDir
+	seenMain := map[string]bool{}
+	seenSibling := map[string]bool{}
+	for _, c := range cwds {
+		mainName := strings.ReplaceAll(c, "/", "-")
+		if !seenMain[mainName] {
+			dirs = append(dirs, sessionDir{dir: filepath.Join(base, mainName), cwd: c})
+			seenMain[mainName] = true
+		}
+		prefix := mainName + "--claude-worktrees-"
+		entries, err := os.ReadDir(base)
+		if err != nil {
 			continue
 		}
-		if !strings.HasPrefix(e.Name(), prefix) {
-			continue
+		for _, e := range entries {
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), prefix) {
+				continue
+			}
+			if seenSibling[e.Name()] {
+				continue
+			}
+			seenSibling[e.Name()] = true
+			wtName := strings.TrimPrefix(e.Name(), prefix)
+			dirs = append(dirs, sessionDir{
+				dir: filepath.Join(base, e.Name()),
+				cwd: filepath.Join(c, ".claude", "worktrees", wtName),
+			})
 		}
-		wtName := strings.TrimPrefix(e.Name(), prefix)
-		dirs = append(dirs, sessionDir{
-			dir: filepath.Join(base, e.Name()),
-			cwd: filepath.Join(cwd, ".claude", "worktrees", wtName),
-		})
 	}
 	return dirs, nil
 }

@@ -685,6 +685,46 @@ moves the tab/program lifecycle, update `injectSimulatedApproval` accordingly.
 
 ---
 
+## 21. Symlink-resolved Claude session dirs
+
+**Purpose.** Claude encodes its on-disk session-file path from the
+canonical (symlink-resolved) cwd via `getcwd(2)`. ask's
+`os.Getwd` may instead return the unresolved form when `$PWD` is set
+and stat-matches `.` — for example, when `ask resume` chdirs into a
+workspace whose canonical path crosses a symlink (`/home/osso/Projects`
+→ `/syncthing/Sync/Projects`). Without this patch the lookup encodes
+the unresolved form and the session file isn't found.
+
+**Behavior details worth preserving.**
+- `claudeCandidateSessionDirs(cwd)` adds the `filepath.EvalSymlinks(cwd)`
+  result as a second candidate when it differs from the literal cwd.
+  Both the main `~/.claude/projects/<encoded>` dir and any
+  `--claude-worktrees-<name>` siblings are enumerated for each form.
+- The literal cwd's main dir stays first in the returned slice so the
+  fallback in `claudeSessionPath` (`dirs[0].dir`) — used to construct
+  error messages when nothing is found — keeps reporting the path the
+  caller passed in.
+- Sibling and main directories are de-duplicated across the two forms
+  so a non-symlinked cwd keeps the same single-form behavior it had
+  before.
+- `EvalSymlinks` errors are non-fatal: ask continues with just the
+  literal cwd's candidates. This keeps the function safe to call on a
+  cwd that doesn't exist or has been pruned.
+
+**Key files.**
+- `session.go` (`claudeCandidateSessionDirs`)
+- `session_test.go` (`TestClaudeCandidateSessionDirs_ResolvesSymlinkedCwd`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'ClaudeCandidateSessionDirs|ClaudeSessionPath|LoadClaudeHistory'`
+- `go test ./...`
+
+**Rebase risk.** Low. Changes a single helper. If upstream rewrites
+the encoding (e.g. switches to a hash, or starts storing the path in a
+manifest), drop this patch in favor of the upstream lookup.
+
+---
+
 ## 20. ask resume restores LastProvider
 
 **Purpose.** `ask resume <vsID>` should reopen the conversation under the
