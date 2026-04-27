@@ -748,17 +748,29 @@ which feels broken in any normal editing flow.
 - `InsertNewline` continues to be customised right above (this patch
   shares the same block, so they should be re-applied together when
   rebasing).
+- The app-level tab dispatcher in `tabs.go` was rebound from
+  `ctrl+left` / `ctrl+right` to `ctrl+shift+pgup` / `ctrl+shift+pgdown`
+  in the same patch series. Without that move, the textarea bindings
+  above are dead because `app.Update` consumes ctrl+left/right before
+  the keypress reaches the active tab. `isCtrlShiftSpecial` (in
+  `util.go`) mirrors `isCtrlSpecial`'s tolerance for both modded-code
+  and `String()`/`Keystroke()` shapes.
 
 **Key files.**
 - `main.go` (`newTab` textarea KeyMap setup)
+- `tabs.go` (`app.Update` tab-switch dispatch on ctrl+shift+pgup/pgdown)
+- `util.go` (`isCtrlShiftSpecial`)
 - `main_test.go` (`TestNewTab_TextareaBindsCtrlWordMotion`)
+- `tabs_test.go` (`TestApp_CtrlShiftPgUpPgDownSwitchesTabs`,
+  `TestApp_CtrlLeftRightDoesNotSwitchTabs`)
 
 **Tests to re-run after rebase.**
-- `go test ./... -run TextareaBindsCtrlWordMotion`
+- `go test ./... -run 'TextareaBindsCtrlWordMotion|CtrlShiftPgUpPgDown|CtrlLeftRightDoesNotSwitch'`
 - `go test ./...`
 
-**Rebase risk.** Low. Only adds entries to existing KeyMap fields; if
-upstream renames or moves the textarea KeyMap, follow that rename.
+**Rebase risk.** Low. Only adds entries to existing KeyMap fields and
+swaps the tab-switch key binding; if upstream renames or moves the
+textarea KeyMap or the app-level tab dispatch, follow that rename.
 
 ---
 

@@ -127,10 +127,10 @@ func (a app) dispatchUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isCtrlKey(m, 'n') {
 			return a.openTab()
 		}
-		if isCtrlSpecial(m, tea.KeyLeft, "left") {
+		if isCtrlShiftSpecial(m, tea.KeyPgUp, "pgup") {
 			return a.switchTab(a.active - 1)
 		}
-		if isCtrlSpecial(m, tea.KeyRight, "right") {
+		if isCtrlShiftSpecial(m, tea.KeyPgDown, "pgdown") {
 			return a.switchTab(a.active + 1)
 		}
 		return a.dispatchActive(msg)

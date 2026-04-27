@@ -155,6 +155,46 @@ func TestApp_CtrlNOpensNewTab(t *testing.T) {
 	}
 }
 
+// Tab switching is bound to ctrl+shift+pgup / ctrl+shift+pgdown so
+// ctrl+left/right stays free for textarea word motion. The legacy
+// ctrl+left/right bindings must NOT switch tabs anymore.
+func TestApp_CtrlShiftPgUpPgDownSwitchesTabs(t *testing.T) {
+	preserveCwd(t)
+	a := testAppWithTwoTabs(t)
+	if a.active != 1 {
+		t.Fatalf("precondition: testAppWithTwoTabs starts on tab 1, got active=%d", a.active)
+	}
+
+	newM, _ := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl | tea.ModShift, Code: tea.KeyPgUp})
+	a2 := newM.(app)
+	if a2.active != 0 {
+		t.Fatalf("ctrl+shift+pgup should move to previous tab; active=%d want 0", a2.active)
+	}
+
+	newM, _ = a2.Update(tea.KeyPressMsg{Mod: tea.ModCtrl | tea.ModShift, Code: tea.KeyPgDown})
+	a3 := newM.(app)
+	if a3.active != 1 {
+		t.Fatalf("ctrl+shift+pgdown should move to next tab; active=%d want 1", a3.active)
+	}
+}
+
+func TestApp_CtrlLeftRightDoesNotSwitchTabs(t *testing.T) {
+	preserveCwd(t)
+	a := testAppWithTwoTabs(t)
+	startActive := a.active
+
+	for _, msg := range []tea.KeyPressMsg{
+		{Mod: tea.ModCtrl, Code: tea.KeyLeft},
+		{Mod: tea.ModCtrl, Code: tea.KeyRight},
+	} {
+		newM, _ := a.Update(msg)
+		a2 := newM.(app)
+		if a2.active != startActive {
+			t.Errorf("%+v should be forwarded to the active tab, not switch tabs; active=%d want %d", msg, a2.active, startActive)
+		}
+	}
+}
+
 func TestApp_CtrlTDoesNotOpenNewTab(t *testing.T) {
 	first := newTestModel(t, newFakeProvider())
 	a := app{
