@@ -685,6 +685,44 @@ moves the tab/program lifecycle, update `injectSimulatedApproval` accordingly.
 
 ---
 
+## 23. Symlink-resolved cwd in bash-hook approval payload
+
+**Purpose.** `decideViaBashHook` and `runPersistRule` send `cwd` to
+`claude-bash-hook-approval`, which pre-classifies file-edit tools as
+SAFE iff `target.starts_with(cwd)`. Claude's subprocess sees the
+canonical cwd via `getcwd(2)` (the kernel resolves `cmd.Dir`
+symlinks) and reports tool input file paths in canonical form. ask's
+`os.Getwd` returns the literal `$PWD` form when it stat-matches `.`,
+so without this patch a symlinked workspace produces a literal cwd
+that fails the `starts_with` check against the canonical target,
+demoting otherwise-in-scope worktree edits to Unsure and surfacing
+the approval modal.
+
+**Behavior details worth preserving.**
+- `bashHookCwd()` calls `os.Getwd` then `filepath.EvalSymlinks` and
+  returns the resolved form; on error it falls back to the literal
+  cwd, and on a getwd failure it returns "" (caller's bash-hook
+  process then uses its own cwd).
+- Both `decideViaBashHook` and `runPersistRule` use the helper so the
+  decide path and the persist-rule path agree on which cwd they're
+  asserting against.
+- Plain (non-symlinked) cwds round-trip unchanged — `EvalSymlinks` is
+  a no-op when the path has no symlinks.
+
+**Key files.**
+- `mcp.go` (`bashHookCwd`, `decideViaBashHook`, `runPersistRule`)
+- `mcp_test.go` (`TestBashHookCwd_ResolvesSymlink`,
+  `TestDecideViaBashHook_PayloadCwdIsSymlinkResolved`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'BashHookCwd|DecideViaBashHook|RunPersistRule'`
+- `go test ./...`
+
+**Rebase risk.** Low. Pure helper added in `mcp.go`; both call sites
+were already issuing `os.Getwd` and just route through it now.
+
+---
+
 ## 22. Ctrl+left/right word motion in the textarea
 
 **Purpose.** Bubbles' textarea defaults bind word motion only to

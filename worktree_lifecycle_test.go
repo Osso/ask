@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 )
@@ -204,6 +205,70 @@ func TestEnsureProc_ResumeRecreatesMissingWorktree(t *testing.T) {
 	}
 	if p.startArgs[0].Cwd != wtPath {
 		t.Errorf("StartSession Cwd=%q want %q", p.startArgs[0].Cwd, wtPath)
+	}
+}
+
+// TestResumeVirtualSession_KeepsWorktreeCwd is the end-to-end
+// regression for the `ask resume <vsid>` permission-prompt issue:
+// a VS whose ProviderSessionRef.Cwd points at a worktree must, after
+// going through resumeVirtualSession + ensureProc, hand the provider
+// a StartSession Cwd that is still the worktree path — not the
+// project root. The bash-hook approval pre-classifies file edits as
+// SAFE based on cwd, so a regression here demotes worktree edits to
+// modal prompts.
+func TestResumeVirtualSession_KeepsWorktreeCwd(t *testing.T) {
+	dir := initGitRepo(t)
+	t.Chdir(dir)
+	isolateHome(t)
+	p := newFakeProvider()
+	p.id = "claude"
+	p.caps = ProviderCapabilities{Resume: true}
+	p.loadHistoryFn = func(id string, _ HistoryOpts) ([]historyEntry, error) {
+		return []historyEntry{{kind: histResponse, text: "loaded:" + id}}, nil
+	}
+	withRegisteredProviders(t, p)
+
+	wt := "fluttering-coding-otter"
+	wtPath, _, err := createWorktreeAtName(dir, wt)
+	if err != nil {
+		t.Fatalf("seed worktree: %v", err)
+	}
+
+	store := &virtualSessionStore{Version: 1}
+	vsID := upsertVirtualSession(store, "", dir, "claude", "claude-native-id",
+		wtPath, "preview", time.Now().UTC())
+	if err := saveVirtualSessions(store); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	m := newTestModel(t, p)
+	m.cwd = dir
+	m.worktree = true
+	newM, _ := m.resumeVirtualSession(sessionEntry{id: vsID, virtualSessionID: vsID})
+	mm := newM.(model)
+	if mm.sessionID != "claude-native-id" {
+		t.Fatalf("sessionID=%q want claude-native-id", mm.sessionID)
+	}
+	if mm.resumeCwd != wtPath {
+		t.Fatalf("resumeCwd=%q want worktree path %q", mm.resumeCwd, wtPath)
+	}
+
+	if err := mm.ensureProc(); err != nil {
+		t.Fatalf("ensureProc: %v", err)
+	}
+	if len(p.startArgs) != 1 {
+		t.Fatalf("StartSession call count=%d want 1", len(p.startArgs))
+	}
+	if p.startArgs[0].Cwd != wtPath {
+		t.Errorf("resumed worktree cwd lost: StartSession Cwd=%q want %q",
+			p.startArgs[0].Cwd, wtPath)
+	}
+	if p.startArgs[0].SessionID != "claude-native-id" {
+		t.Errorf("StartSession sessionID=%q want claude-native-id (resume)",
+			p.startArgs[0].SessionID)
+	}
+	if mm.worktreeName != wt {
+		t.Errorf("worktreeName=%q want %q (derived from resumeCwd)", mm.worktreeName, wt)
 	}
 }
 

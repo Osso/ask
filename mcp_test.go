@@ -837,6 +837,72 @@ func TestRunPersistRule_InvokesBinaryWithExpectedArgvAndStdin(t *testing.T) {
 	}
 }
 
+func TestBashHookCwd_ResolvesSymlink(t *testing.T) {
+	tmp := t.TempDir()
+	real := filepath.Join(tmp, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatalf("mkdir real: %v", err)
+	}
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	canonReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatalf("eval real: %v", err)
+	}
+	t.Chdir(link)
+	got := bashHookCwd()
+	if got != canonReal {
+		t.Errorf("bashHookCwd=%q want canonical %q", got, canonReal)
+	}
+}
+
+func TestDecideViaBashHook_PayloadCwdIsSymlinkResolved(t *testing.T) {
+	tmp := t.TempDir()
+	real := filepath.Join(tmp, "real")
+	if err := os.Mkdir(real, 0o755); err != nil {
+		t.Fatalf("mkdir real: %v", err)
+	}
+	link := filepath.Join(tmp, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	canonReal, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatalf("eval real: %v", err)
+	}
+
+	hookDir := t.TempDir()
+	stdinFile := filepath.Join(hookDir, "stdin")
+	script := fmt.Sprintf("#!/bin/sh\ncat > %q\nprintf '%%s\\n' '{\"verdict\":\"safe\"}'\n", stdinFile)
+	bin := filepath.Join(hookDir, "claude-bash-hook-approval")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake hook: %v", err)
+	}
+	injectHookPath(t, hookDir)
+
+	t.Chdir(link)
+	if _, _, err := decideViaBashHook(context.Background(), approvalIn{
+		ToolName: "Edit",
+		Input:    map[string]any{"file_path": filepath.Join(canonReal, "x.go")},
+	}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+
+	raw, err := os.ReadFile(stdinFile)
+	if err != nil {
+		t.Fatalf("read stdin: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(raw), &payload); err != nil {
+		t.Fatalf("parse: %v\n%s", err, string(raw))
+	}
+	if payload["cwd"] != canonReal {
+		t.Errorf("payload cwd=%v want %q", payload["cwd"], canonReal)
+	}
+}
+
 func TestRunPersistRule_NoBinaryIsSilentNoop(t *testing.T) {
 	removeHookFromPath(t)
 	// Should not panic or hang. Single attempt; returns silently.

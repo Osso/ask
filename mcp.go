@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -413,7 +414,7 @@ func runPersistRule(in approvalIn, feedback string) {
 		debugLog("persist-rule skipped: binary not on PATH: %v", err)
 		return
 	}
-	cwd, _ := os.Getwd()
+	cwd := bashHookCwd()
 	payload := map[string]any{
 		"tool_name": in.ToolName,
 		"input":     in.Input,
@@ -518,6 +519,25 @@ func buildDenyBody(message string) []byte {
 
 const bashHookTimeout = 5 * time.Second
 
+// bashHookCwd returns the canonical (symlink-resolved) form of the
+// current working directory for the bash-hook payload. The bash-hook
+// pre-classifies file edits as SAFE iff the target path starts with
+// the supplied cwd; Claude's subprocess sees getcwd(2) (canonical)
+// while ask's os.Getwd may return the unresolved $PWD form, so a
+// literal cwd would mis-match canonical file paths and prompt for
+// otherwise-safe in-scope edits. Empty string when neither call
+// succeeds — caller falls back to the bash-hook process's own cwd.
+func bashHookCwd() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		return resolved
+	}
+	return cwd
+}
+
 // decideViaBashHook shells out to `claude-bash-hook-approval decide` and
 // returns the verdict ("safe", "unsafe", "unsure") and reason. Returns
 // os.ErrNotExist when the binary is not on PATH; caller treats as unsure.
@@ -526,7 +546,7 @@ func decideViaBashHook(ctx context.Context, in approvalIn) (verdict string, reas
 	if err != nil {
 		return "", "", os.ErrNotExist
 	}
-	cwd, _ := os.Getwd()
+	cwd := bashHookCwd()
 	payload := map[string]any{
 		"tool_name":             in.ToolName,
 		"input":                 in.Input,
