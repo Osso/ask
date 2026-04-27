@@ -145,29 +145,44 @@ direct-routing version hit on UNSURE.
   codex via bash-hook's `build_prompt`.
 - `buildDenyBody(message)` produces the `{behavior:"deny",message:...}`
   body for the UNSAFE branch.
+- The approval modal carries an optional feedback text input (Tab past
+  "Always allow" to focus it). On `approvalChoiceAlways` with non-empty
+  feedback, ask spawns `claude-bash-hook-approval persist-rule`
+  fire-and-forget so codex generalizes the feedback into TOML rules,
+  caches the narrow rule in `alwaysAllow` for this session, and returns a
+  plain `allow` body to claude with **no** `updatedPermissions` (the
+  persisted bash-hook rule covers future invocations across sessions). On
+  empty feedback the previous session-scoped `addRules` path is
+  unchanged.
+- `persistRuleFunc` is a package-level var (defaults to `runPersistRule`)
+  so tests can swap in a recorder without spinning up a real subprocess.
 - Standalone Claude Code (no ask) keeps using
   `mcp__claude-bash-hook-approval__approval_prompt` directly via shell
   alias; that path is unchanged.
 
 **Key files.**
 - `claude.go` (`claudeCLIArgs`)
-- `mcp.go` (`approvalIn`, `approvalTool`, `decideViaBashHook`,
+- `mcp.go` (`approvalIn`, `approvalTool`, `handleApprovalReply`,
+  `decideViaBashHook`, `runPersistRule`, `persistRuleFunc`,
   `buildDenyBody`)
+- `approval.go` (`updateApprovalButtons`, `updateApprovalFeedback`,
+  `sendApproval`, `viewApproval`, `approvalFeedbackRow`)
 - `claude_cli_test.go`
-- `mcp_test.go` (`TestDecideViaBashHook_*`,
-  `TestApprovalTool_BashHook*`)
+- `mcp_test.go` (`TestDecideViaBashHook_*`, `TestApprovalTool_BashHook*`,
+  `TestHandleApprovalReply_*`, `TestRunPersistRule_*`)
+- `approval_test.go`
 
 **Tests to re-run after rebase.**
-- `go test ./... -run 'ClaudeCLIArgs|DecideViaBashHook|ApprovalTool'`
+- `go test ./... -run 'ClaudeCLIArgs|DecideViaBashHook|ApprovalTool|HandleApprovalReply|RunPersistRule|^TestApproval_'`
 - `go test ./...`
 
 **Rebase risk.** Medium-high. Touches both provider-argument construction
 and the MCP bridge handler. Re-check (a) the exact `--permission-prompt-tool`
 tool name, (b) that the bash-hook subprocess hand-off still uses the
-`decide` argv subcommand and the JSON wire shape documented in
-`approval_prompt.rs::run_decide_cli`, and (c) that the 5s timeout +
-LookPath fallback both still degrade to the modal rather than failing
-the call.
+`decide` and `persist-rule` argv subcommands and the JSON wire shapes
+documented in `approval_prompt.rs::run_decide_cli` /
+`run_persist_rule_cli`, and (c) that the 5s `decide` timeout + LookPath
+fallback both still degrade to the modal rather than failing the call.
 
 ---
 

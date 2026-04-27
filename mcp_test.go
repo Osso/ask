@@ -10,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -684,4 +686,172 @@ func fakeCallToolRequest(args json.RawMessage) *mcp.CallToolRequest {
 	req := &mcp.CallToolRequest{}
 	req.Params = &mcp.CallToolParamsRaw{Arguments: args}
 	return req
+}
+
+type persistCall struct {
+	in       approvalIn
+	feedback string
+}
+
+// withRecordingPersistRule swaps persistRuleFunc with a recorder for the
+// duration of the test and returns a channel that emits each invocation's
+// payload. The original is restored via t.Cleanup.
+func withRecordingPersistRule(t *testing.T) <-chan persistCall {
+	t.Helper()
+	ch := make(chan persistCall, 4)
+	prev := persistRuleFunc
+	persistRuleFunc = func(in approvalIn, fb string) {
+		ch <- persistCall{in: in, feedback: fb}
+	}
+	t.Cleanup(func() { persistRuleFunc = prev })
+	return ch
+}
+
+func TestHandleApprovalReply_FeedbackPathReturnsPlainAllow(t *testing.T) {
+	calls := withRecordingPersistRule(t)
+	b := &mcpBridge{tabID: 1, alwaysAllow: map[permissionRule]struct{}{}}
+	in := approvalIn{ToolName: "Bash", Input: map[string]any{"command": "git status"}}
+
+	body := b.handleApprovalReply(in, approvalReply{allow: true, feedback: "trust git read-only"})
+
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("parse body: %v", err)
+	}
+	if parsed["behavior"] != "allow" {
+		t.Errorf("behavior=%v want allow", parsed["behavior"])
+	}
+	if _, ok := parsed["updatedPermissions"]; ok {
+		t.Errorf("feedback path must NOT include updatedPermissions, got %v", parsed["updatedPermissions"])
+	}
+
+	select {
+	case c := <-calls:
+		if c.feedback != "trust git read-only" {
+			t.Errorf("recorded feedback=%q want %q", c.feedback, "trust git read-only")
+		}
+		if c.in.ToolName != "Bash" {
+			t.Errorf("recorded tool=%q want Bash", c.in.ToolName)
+		}
+	case <-timeAfter(t, "persistRuleFunc not invoked"):
+	}
+}
+
+func TestHandleApprovalReply_FeedbackPathCachesAlwaysAllow(t *testing.T) {
+	_ = withRecordingPersistRule(t)
+	b := &mcpBridge{tabID: 1, alwaysAllow: map[permissionRule]struct{}{}}
+	in := approvalIn{ToolName: "Bash", Input: map[string]any{"command": "git status"}}
+
+	_ = b.handleApprovalReply(in, approvalReply{allow: true, feedback: "trust git"})
+
+	rule := permissionRuleFor(in.ToolName, in.Input)
+	if !b.ruleAlwaysAllowed(rule) {
+		t.Error("feedback path should cache the rule in alwaysAllow")
+	}
+}
+
+func TestHandleApprovalReply_RememberPathEmitsAddRules(t *testing.T) {
+	_ = withRecordingPersistRule(t)
+	b := &mcpBridge{tabID: 1, alwaysAllow: map[permissionRule]struct{}{}}
+	in := approvalIn{ToolName: "Edit", Input: map[string]any{"file_path": "/tmp/x"}}
+	rule := permissionRule{toolName: "Edit", ruleContent: "/tmp/x"}
+
+	body := b.handleApprovalReply(in, approvalReply{allow: true, remember: &rule})
+
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed["behavior"] != "allow" {
+		t.Errorf("behavior=%v want allow", parsed["behavior"])
+	}
+	if _, ok := parsed["updatedPermissions"]; !ok {
+		t.Error("remember path should emit updatedPermissions")
+	}
+}
+
+func TestHandleApprovalReply_DenyEmitsDeny(t *testing.T) {
+	_ = withRecordingPersistRule(t)
+	b := &mcpBridge{tabID: 1, alwaysAllow: map[permissionRule]struct{}{}}
+	in := approvalIn{ToolName: "Bash", Input: map[string]any{"command": "rm -rf /"}}
+
+	body := b.handleApprovalReply(in, approvalReply{allow: false})
+
+	var parsed map[string]any
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if parsed["behavior"] != "deny" {
+		t.Errorf("behavior=%v want deny", parsed["behavior"])
+	}
+}
+
+func TestRunPersistRule_InvokesBinaryWithExpectedArgvAndStdin(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv")
+	stdinFile := filepath.Join(dir, "stdin")
+	// Two separate files keeps the script trivial — no escape juggling
+	// over a single concatenated record.
+	script := fmt.Sprintf("#!/bin/sh\necho \"$0 $1\" > %q\ncat > %q\n", argvFile, stdinFile)
+	bin := filepath.Join(dir, "claude-bash-hook-approval")
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake hook: %v", err)
+	}
+	injectHookPath(t, dir)
+
+	in := approvalIn{ToolName: "Bash", Input: map[string]any{"command": "git status"}}
+	runPersistRule(in, "trust git read-only")
+
+	argv, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatalf("read argv: %v", err)
+	}
+	header := strings.TrimSpace(string(argv))
+	if !strings.HasSuffix(header, " persist-rule") {
+		t.Errorf("argv subcmd missing 'persist-rule': %q", header)
+	}
+	if !strings.Contains(header, "/claude-bash-hook-approval ") {
+		t.Errorf("argv[0] not the bash-hook binary: %q", header)
+	}
+
+	stdin, err := os.ReadFile(stdinFile)
+	if err != nil {
+		t.Fatalf("read stdin: %v", err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(stdin), &payload); err != nil {
+		t.Fatalf("parse stdin payload: %v\n%s", err, string(stdin))
+	}
+	if payload["tool_name"] != "Bash" {
+		t.Errorf("tool_name=%v want Bash", payload["tool_name"])
+	}
+	if payload["feedback"] != "trust git read-only" {
+		t.Errorf("feedback=%v want 'trust git read-only'", payload["feedback"])
+	}
+	inMap, _ := payload["input"].(map[string]any)
+	if inMap["command"] != "git status" {
+		t.Errorf("input.command=%v want 'git status'", inMap["command"])
+	}
+	if _, ok := payload["cwd"]; !ok {
+		t.Error("payload missing cwd")
+	}
+}
+
+func TestRunPersistRule_NoBinaryIsSilentNoop(t *testing.T) {
+	removeHookFromPath(t)
+	// Should not panic or hang. Single attempt; returns silently.
+	runPersistRule(approvalIn{ToolName: "Bash", Input: map[string]any{"command": "ls"}}, "feedback")
+}
+
+// timeAfter returns a deadline channel for a 2s wait that flags the test
+// with t.Errorf when reached. Used so async-completion assertions don't
+// hang the suite if a goroutine never fires.
+func timeAfter(t *testing.T, msg string) <-chan time.Time {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	go func() {
+		<-deadline
+		t.Errorf("timeout: %s", msg)
+	}()
+	return deadline
 }

@@ -368,10 +368,12 @@ type model struct {
 	askOllamaModel  string
 	askOllamaErr    string
 
-	approvalTool   string
-	approvalInput  map[string]any
-	approvalReply  chan approvalReply
-	approvalChoice int
+	approvalTool          string
+	approvalInput         map[string]any
+	approvalReply         chan approvalReply
+	approvalChoice        int
+	approvalFeedback      string
+	approvalFeedbackFocus bool
 
 	cancelTurnConfirming bool
 	cancelTurnChoice     int

@@ -81,6 +81,14 @@ type permissionRule struct {
 type approvalReply struct {
 	allow    bool
 	remember *permissionRule
+	// feedback is set when the user picked "Always allow" and typed
+	// guidance into the modal's feedback input. When non-empty alongside
+	// allow=true, mcp.go shells out to `claude-bash-hook-approval
+	// persist-rule` to generalize the feedback into TOML rules and
+	// returns a plain "allow" decision (no updatedPermissions) — the
+	// session-scoped rule path is intentionally bypassed in this case
+	// because the persisted bash-hook rule will cover future invocations.
+	feedback string
 }
 
 type approvalRequestMsg struct {
@@ -352,18 +360,81 @@ func (b *mcpBridge) approvalTool(ctx context.Context, req *mcp.CallToolRequest) 
 	}
 	select {
 	case resp := <-reply:
-		if resp.allow && resp.remember != nil {
-			b.rememberAlwaysAllow(*resp.remember)
-		}
-		body := buildApprovalBody(resp.allow, in.Input, resp.remember)
-		debugLog("approval_prompt reply tool=%s allow=%v remember=%v body=%s",
-			in.ToolName, resp.allow, resp.remember != nil, string(body))
+		body := b.handleApprovalReply(in, resp)
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
 		}, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// persistRuleFunc is the entry point for the bash-hook persist-rule
+// subprocess invocation; tests swap this with a recorder so we don't need
+// to spin up a real subprocess on every assertion.
+var persistRuleFunc = runPersistRule
+
+// handleApprovalReply maps a modal reply into the wire body that
+// approval_prompt returns to claude, including the side effects of caching
+// session-scoped allowlist entries and dispatching the bash-hook persist
+// path. Pulled out of approvalTool so tests can drive it directly without
+// stubbing teaProgramPtr.
+func (b *mcpBridge) handleApprovalReply(in approvalIn, resp approvalReply) []byte {
+	if resp.allow && resp.feedback != "" {
+		rule := permissionRuleFor(in.ToolName, in.Input)
+		b.rememberAlwaysAllow(rule)
+		go persistRuleFunc(in, resp.feedback)
+		body := buildApprovalBody(true, in.Input, nil)
+		debugLog("approval_prompt reply tool=%s allow=true feedback-len=%d body=%s",
+			in.ToolName, len(resp.feedback), string(body))
+		return body
+	}
+	if resp.allow && resp.remember != nil {
+		b.rememberAlwaysAllow(*resp.remember)
+	}
+	body := buildApprovalBody(resp.allow, in.Input, resp.remember)
+	debugLog("approval_prompt reply tool=%s allow=%v remember=%v body=%s",
+		in.ToolName, resp.allow, resp.remember != nil, string(body))
+	return body
+}
+
+// persistRuleTimeout caps the bash-hook persist-rule subprocess lifetime.
+// The bash-hook side calls codex which can take a few seconds; 30s is a
+// generous upper bound for the slowest model. Fire-and-forget — the modal
+// has already returned a decision to claude.
+const persistRuleTimeout = 30 * time.Second
+
+// runPersistRule shells out to `claude-bash-hook-approval persist-rule`
+// fire-and-forget. Single attempt; errors are debug-logged only because the
+// modal has already replied to claude with a plain allow.
+func runPersistRule(in approvalIn, feedback string) {
+	bin, err := exec.LookPath("claude-bash-hook-approval")
+	if err != nil {
+		debugLog("persist-rule skipped: binary not on PATH: %v", err)
+		return
+	}
+	cwd, _ := os.Getwd()
+	payload := map[string]any{
+		"tool_name": in.ToolName,
+		"input":     in.Input,
+		"feedback":  feedback,
+		"cwd":       cwd,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		debugLog("persist-rule marshal err: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), persistRuleTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "persist-rule")
+	cmd.Stdin = bytes.NewReader(append(data, '\n'))
+	out, err := cmd.Output()
+	if err != nil {
+		debugLog("persist-rule err tool=%s err=%v out=%s", in.ToolName, err, string(out))
+		return
+	}
+	debugLog("persist-rule done tool=%s out=%s", in.ToolName, bytes.TrimSpace(out))
 }
 
 // permissionRuleFor maps a tool invocation to its narrowest rule scope. For

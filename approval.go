@@ -9,12 +9,13 @@ import (
 
 
 const (
-	approvalBoxWidth      = 90
-	approvalChoiceDeny    = 0
-	approvalChoiceAllow   = 1
-	approvalChoiceAlways  = 2
-	approvalChoiceCount   = 3
-	approvalSummaryMaxLns = 2
+	approvalBoxWidth       = 90
+	approvalChoiceDeny     = 0
+	approvalChoiceAllow    = 1
+	approvalChoiceAlways   = 2
+	approvalChoiceCount    = 3
+	approvalSummaryMaxLns  = 2
+	approvalFeedbackMaxLen = 500
 )
 
 func (m model) startApproval(msg approvalRequestMsg) model {
@@ -24,6 +25,8 @@ func (m model) startApproval(msg approvalRequestMsg) model {
 	m.approvalInput = msg.input
 	m.approvalReply = msg.reply
 	m.approvalChoice = 0
+	m.approvalFeedback = ""
+	m.approvalFeedbackFocus = false
 	return m
 }
 
@@ -33,6 +36,8 @@ func (m model) clearApproval() model {
 	m.approvalInput = nil
 	m.approvalReply = nil
 	m.approvalChoice = 0
+	m.approvalFeedback = ""
+	m.approvalFeedbackFocus = false
 	return m
 }
 
@@ -40,8 +45,16 @@ func (m model) sendApproval(choice int) model {
 	if m.approvalReply != nil {
 		reply := approvalReply{allow: choice != approvalChoiceDeny}
 		if choice == approvalChoiceAlways {
-			rule := permissionRuleFor(m.approvalTool, m.approvalInput)
-			reply.remember = &rule
+			feedback := strings.TrimSpace(m.approvalFeedback)
+			if feedback != "" {
+				// Bash-hook persist-rule path: skip the session-scoped
+				// addRules update; mcp.go fires persist-rule and replies
+				// plain allow.
+				reply.feedback = feedback
+			} else {
+				rule := permissionRuleFor(m.approvalTool, m.approvalInput)
+				reply.remember = &rule
+			}
 		}
 		m.approvalReply <- reply
 	}
@@ -58,7 +71,18 @@ func (m model) updateApproval(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.killProc()
 		m.appendHistory(outputStyle.Render(dimStyle.Render("✗ cancelled")))
 		return m, nil
-	case msg.Code == tea.KeyEsc, msg.Code == 'n' && msg.Mod == 0:
+	case msg.Code == tea.KeyEsc:
+		return m.sendApproval(approvalChoiceDeny), nil
+	}
+	if m.approvalFeedbackFocus {
+		return m.updateApprovalFeedback(msg)
+	}
+	return m.updateApprovalButtons(msg)
+}
+
+func (m model) updateApprovalButtons(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Code == 'n' && msg.Mod == 0:
 		return m.sendApproval(approvalChoiceDeny), nil
 	case msg.Code == 'y' && msg.Mod == 0:
 		return m.sendApproval(approvalChoiceAllow), nil
@@ -75,10 +99,42 @@ func (m model) updateApproval(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case msg.Code == tea.KeyTab:
-		m.approvalChoice = (m.approvalChoice + 1) % approvalChoiceCount
+		// Tab cycles deny → allow → always → feedback → deny. Reaching
+		// the feedback input only after the user has tabbed past
+		// "Always allow" keeps the natural reading order intact and
+		// makes the shortcut explicit (Tab from any other button just
+		// moves to the next button).
+		if m.approvalChoice < approvalChoiceCount-1 {
+			m.approvalChoice++
+			return m, nil
+		}
+		m.approvalFeedbackFocus = true
 		return m, nil
 	case msg.Code == tea.KeyEnter:
 		return m.sendApproval(m.approvalChoice), nil
+	}
+	return m, nil
+}
+
+func (m model) updateApprovalFeedback(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case msg.Code == tea.KeyTab:
+		m.approvalFeedbackFocus = false
+		m.approvalChoice = approvalChoiceDeny
+		return m, nil
+	case msg.Code == tea.KeyEnter:
+		return m.sendApproval(m.approvalChoice), nil
+	case msg.Code == tea.KeyBackspace:
+		if m.approvalFeedback != "" {
+			r := []rune(m.approvalFeedback)
+			m.approvalFeedback = string(r[:len(r)-1])
+		}
+		return m, nil
+	case msg.Text != "" && msg.Mod&^tea.ModShift == 0:
+		if len(m.approvalFeedback)+len(msg.Text) <= approvalFeedbackMaxLen {
+			m.approvalFeedback += msg.Text
+		}
+		return m, nil
 	}
 	return m, nil
 }
@@ -109,15 +165,48 @@ func (m model) viewApproval() string {
 	}
 	buttons := lipgloss.JoinHorizontal(lipgloss.Top, deny, "  ", allow, "  ", always)
 
-	help := askHelpStyle.Render("←→ switch · enter confirm · y allow · a always · n/esc deny · ctrl+c cancel turn")
+	feedbackRow := approvalFeedbackRow(m.approvalFeedback, m.approvalFeedbackFocus, innerW)
+
+	helpText := "←→ switch · tab feedback · enter confirm · y/a/n shortcuts · ctrl+c cancel"
+	if m.approvalFeedbackFocus {
+		helpText = "type guidance · tab back to buttons · enter submit · esc cancel"
+	}
+	help := askHelpStyle.Render(helpText)
 
 	lines := []string{title, "", headline}
 	if summary != "" {
 		lines = append(lines, summary)
 	}
-	lines = append(lines, "", buttons, "", help)
+	lines = append(lines, "", buttons, "", feedbackRow, "", help)
 	content := strings.Join(lines, "\n")
 	return approvalBoxStyle.Width(innerW).Render(content)
+}
+
+// approvalFeedbackRow renders the optional feedback line under the buttons.
+// When focused, the visible text gets a trailing block-cursor and the label
+// leans on the active "Always allow" style so the user can see what action
+// will fire on Enter. When unfocused with empty text we show a dim hint.
+func approvalFeedbackRow(text string, focused bool, width int) string {
+	var label string
+	if focused {
+		label = approvalAlwaysActiveStyle.Render("Feedback")
+	} else {
+		label = dimStyle.Render("Feedback (always allow)")
+	}
+	avail := width - lipgloss.Width(label) - 2
+	if avail < 8 {
+		avail = 8
+	}
+	body := text
+	if focused {
+		body += "▏"
+	} else if body == "" {
+		body = dimStyle.Render("(optional — Tab past Always allow to type)")
+	}
+	if lipgloss.Width(body) > avail {
+		body = truncate(body, avail)
+	}
+	return label + ": " + body
 }
 
 // approvalHeadline is the single short line telling the user what Claude is
