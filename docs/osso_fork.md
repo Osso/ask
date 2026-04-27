@@ -14,6 +14,8 @@ Current patch stack:
 ```text
 734f5d5 main: add CLI option validation, reject unknown flags/subcommands
 bd2ca81 Add --simulate-approval flag to exercise the approval modal at startup
+ae42218 selection: copy to clipboard on mouse release
+f0a6d4d input: copy selection on Ctrl+C when one is active
 3419906 Show Codex hook output
 05e132f Support run-plan for Claude provider
 3c92873 Preserve Claude stop hook in ask
@@ -597,7 +599,56 @@ status-string renames that would silently disable the error styling.
 
 ---
 
-## 16. Simulated approval flag
+## 16. Selection clipboard ergonomics
+
+**Purpose.** Make ask's mouse selection feel like a normal terminal selection
+even though ask owns the mouse capture (and therefore terminal-emulator copy
+bindings cannot see the selection).
+
+**Behavior details worth preserving.**
+- Mouse-release with a non-degenerate selection writes the selected text to
+  the system clipboard immediately via `copyTextCmd`. No keystroke required.
+  Matches the copy-on-select UX users already get from ghostty/kitty's own
+  `copy-on-select` option.
+- The selection highlight is **kept visible** after release (`selActive=true`,
+  no `clearSelection`) so the user sees what was just copied. Click-drag
+  again or click-no-drag to clear.
+- Ctrl+C with an active selection routes to `copySelectionAndClear` (clears
+  the highlight on copy). This is the explicit copy-and-clear shortcut and
+  serves as a backup path if the release-time copy was somehow missed.
+- Ctrl+C also resets `exitArmed` on the copy path so a stale "press ctrl+c
+  again to exit" arm from before the selection does not close the tab on the
+  next press.
+- Ctrl+C with no selection falls through to the existing cancel-turn /
+  arm-exit / clear-input ladder unchanged.
+- Note: terminal emulators may consume Ctrl+C themselves (e.g. ghostty's
+  `ctrl+c=copy_to_clipboard` binding can swallow the keystroke even with a
+  `performable:` prefix when ask owns the mouse). Copy-on-release is the
+  load-bearing path; the Ctrl+C handler is best-effort and only fires when
+  the keystroke actually reaches ask.
+
+**Key files.**
+- `update.go` (`tea.MouseReleaseMsg` handler, `updateInput` Ctrl+C branch)
+- `selection.go` (`copySelectionAndClear`, `copyTextCmd`)
+- `selection_test.go` (`TestUpdateMouseRelease_FinalizesSelectionAndCopies`,
+  `TestUpdateCtrlC_WithSelectionCopiesAndClears`,
+  `TestUpdateCtrlC_NoSelectionFallsThroughToCancel`,
+  `TestUpdateCtrlC_NoSelectionEmptyInputArmsExit`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'MouseRelease|UpdateCtrlC|CopySelection|RightClick'`
+- `go test ./...`
+
+**Rebase risk.** Medium. Upstream may evolve the selection or
+mouse-handling layer (ScrollbarDragging, viewport mouse capture, modal
+dismissal), so re-check the MouseReleaseMsg branch carefully — both the
+copy trigger and the deliberate omission of `clearSelection` need to
+survive. If upstream introduces its own copy-on-select toggle, prefer
+delegating to that and dropping this patch.
+
+---
+
+## 17. Simulated approval flag
 
 **Purpose.** Provide a developer-facing CLI flag that fires a synthetic
 `approvalRequestMsg` directly into the running tea program at startup so the
@@ -634,7 +685,47 @@ moves the tab/program lifecycle, update `injectSimulatedApproval` accordingly.
 
 ---
 
-## 17. CLI provider/model overrides
+## 20. ask resume restores LastProvider
+
+**Purpose.** `ask resume <vsID>` should reopen the conversation under the
+provider that owned it last, not whatever the saved default config now
+says. Resuming a Claude conversation while the saved default is Codex
+previously dropped the user into Codex with no native session.
+
+**Behavior details worth preserving.**
+- `resumeLookup` returns `(id, workspace, lastProvider, err)`. The
+  `LastProvider` field has been on `VirtualSession` for a while; the
+  resume path now consumes it.
+- In `main`, after `saveConfig(cfg)` runs (so we don't persist the
+  override), the provider is resolved in this order: `--provider` flag,
+  then `LastProvider` from the resumed VS, then the saved
+  `cfg.Provider`. The flag always wins so users can force a different
+  provider on a resumed conversation.
+- `LastProvider` is run through `strictProviderByID`. If the stored id
+  is no longer registered (provider removed/renamed), ask warns on
+  stderr and falls back to the saved default rather than failing.
+- VSes written before `LastProvider` was tracked have an empty string
+  for that field; `resumeLookup` returns "" and the saved default is
+  used, matching the prior behavior.
+
+**Key files.**
+- `main.go` (`resumeLookup`, `main` resume dispatch)
+- `main_test.go` (`TestResumeLookup_FindsVSAndReturnsWorkspace`,
+  `TestResumeLookup_ReturnsLastProviderForCodexVS`,
+  `TestResumeLookup_LegacyVSWithoutLastProviderReturnsEmpty`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run ResumeLookup`
+- `go test ./...`
+
+**Rebase risk.** Low. The only signature change is `resumeLookup`'s
+extra return. If upstream introduces its own provider-aware resume
+flow, prefer dropping this patch over carrying a parallel
+implementation.
+
+---
+
+## 19. CLI provider/model overrides
 
 **Purpose.** Let users pick the provider and/or model for a single launch
 without editing config or opening the TUI's `/config` / `/provider` /

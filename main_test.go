@@ -20,12 +20,15 @@ func TestResumeLookup_FindsVSAndReturnsWorkspace(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	gotID, gotWS, err := resumeLookup(vsID)
+	gotID, gotWS, gotProv, err := resumeLookup(vsID)
 	if err != nil {
 		t.Fatalf("resumeLookup: %v", err)
 	}
 	if gotID != vsID {
 		t.Errorf("returned id=%q want %q", gotID, vsID)
+	}
+	if gotProv != "claude" {
+		t.Errorf("returned lastProvider=%q want claude", gotProv)
 	}
 	wantAbs, _ := filepath.EvalSymlinks(ws)
 	gotAbs, _ := filepath.EvalSymlinks(gotWS)
@@ -34,16 +37,58 @@ func TestResumeLookup_FindsVSAndReturnsWorkspace(t *testing.T) {
 	}
 }
 
+func TestResumeLookup_ReturnsLastProviderForCodexVS(t *testing.T) {
+	isolateHome(t)
+	ws := t.TempDir()
+	store := &virtualSessionStore{Version: 1}
+	vsID := upsertVirtualSession(store, "", ws, "codex", "native-cdx", ws,
+		"hi", time.Now().UTC())
+	if err := saveVirtualSessions(store); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	_, _, gotProv, err := resumeLookup(vsID)
+	if err != nil {
+		t.Fatalf("resumeLookup: %v", err)
+	}
+	if gotProv != "codex" {
+		t.Errorf("lastProvider=%q want codex", gotProv)
+	}
+}
+
+func TestResumeLookup_LegacyVSWithoutLastProviderReturnsEmpty(t *testing.T) {
+	isolateHome(t)
+	ws := t.TempDir()
+	store := &virtualSessionStore{Version: 1, Sessions: []VirtualSession{{
+		ID:        "vs-legacy",
+		Workspace: ws,
+		// LastProvider intentionally omitted to simulate a VS written
+		// before that field was tracked.
+		ProviderSessions: map[string]ProviderSessionRef{
+			"claude": {SessionID: "native-x", Cwd: ws},
+		},
+	}}}
+	if err := saveVirtualSessions(store); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	_, _, gotProv, err := resumeLookup("vs-legacy")
+	if err != nil {
+		t.Fatalf("resumeLookup: %v", err)
+	}
+	if gotProv != "" {
+		t.Errorf("legacy VS lastProvider=%q want empty", gotProv)
+	}
+}
+
 func TestResumeLookup_EmptyIDErrors(t *testing.T) {
 	isolateHome(t)
-	if _, _, err := resumeLookup(""); err == nil {
+	if _, _, _, err := resumeLookup(""); err == nil {
 		t.Fatal("empty id should error")
 	}
 }
 
 func TestResumeLookup_UnknownIDErrors(t *testing.T) {
 	isolateHome(t)
-	_, _, err := resumeLookup("vs-does-not-exist")
+	_, _, _, err := resumeLookup("vs-does-not-exist")
 	if err == nil {
 		t.Fatal("unknown vsID should error")
 	}
@@ -61,7 +106,7 @@ func TestResumeLookup_MissingWorkspaceErrors(t *testing.T) {
 	if err := saveVirtualSessions(store); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	_, _, err := resumeLookup(vsID)
+	_, _, _, err := resumeLookup(vsID)
 	if err == nil {
 		t.Fatal("missing workspace should error")
 	}
@@ -75,7 +120,7 @@ func TestResumeLookup_EmptyWorkspaceErrors(t *testing.T) {
 	if err := saveVirtualSessions(store); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	_, _, err := resumeLookup(vsID)
+	_, _, _, err := resumeLookup(vsID)
 	if err == nil {
 		t.Fatal("empty workspace should error")
 	}

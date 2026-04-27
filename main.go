@@ -327,30 +327,32 @@ func simulatedApprovalInput(tool string) map[string]any {
 }
 
 // resumeLookup resolves vsID against ~/.config/ask/sessions.json and
-// returns the matching VS id and the recorded workspace path. Pure: no
-// side effects — main is responsible for the os.Chdir, which keeps
-// tests self-contained (chdirs from a test process pollute every test
-// that follows because the cleanup ordering against t.TempDir teardown
-// is fragile when the cwd points inside a doomed tempdir).
-func resumeLookup(vsID string) (id, workspace string, err error) {
+// returns the matching VS id, the recorded workspace path, and the
+// provider that owned the conversation last (empty for VSes written
+// before LastProvider was tracked). Pure: no side effects — main is
+// responsible for the os.Chdir, which keeps tests self-contained
+// (chdirs from a test process pollute every test that follows because
+// the cleanup ordering against t.TempDir teardown is fragile when the
+// cwd points inside a doomed tempdir).
+func resumeLookup(vsID string) (id, workspace, lastProvider string, err error) {
 	if vsID == "" {
-		return "", "", fmt.Errorf("missing virtual session id")
+		return "", "", "", fmt.Errorf("missing virtual session id")
 	}
 	store, err := loadVirtualSessions()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	vs := store.findByID(vsID)
 	if vs == nil {
-		return "", "", fmt.Errorf("virtual session %q not found", vsID)
+		return "", "", "", fmt.Errorf("virtual session %q not found", vsID)
 	}
 	if vs.Workspace == "" {
-		return "", "", fmt.Errorf("virtual session %q has no workspace recorded", vsID)
+		return "", "", "", fmt.Errorf("virtual session %q has no workspace recorded", vsID)
 	}
 	if _, err := os.Stat(vs.Workspace); err != nil {
-		return "", "", fmt.Errorf("workspace %s: %w", vs.Workspace, err)
+		return "", "", "", fmt.Errorf("workspace %s: %w", vs.Workspace, err)
 	}
-	return vs.ID, vs.Workspace, nil
+	return vs.ID, vs.Workspace, vs.LastProvider, nil
 }
 
 func main() {
@@ -380,13 +382,13 @@ func main() {
 		printHelp(os.Stderr)
 		os.Exit(2)
 	}
-	var startupResumeVID string
+	var startupResumeVID, resumeProvider string
 	switch cmd.Kind {
 	case "help":
 		printHelp(os.Stdout)
 		return
 	case "resume":
-		vid, ws, err := resumeLookup(cmd.VSID)
+		vid, ws, lastProv, err := resumeLookup(cmd.VSID)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "ask resume:", err)
 			os.Exit(1)
@@ -396,6 +398,7 @@ func main() {
 			os.Exit(1)
 		}
 		startupResumeVID = vid
+		resumeProvider = lastProv
 	}
 	cfg, _ := loadConfig()
 	_ = saveConfig(cfg)
@@ -410,9 +413,22 @@ func main() {
 	}
 	// CLI overrides apply after saveConfig so they don't persist; the
 	// next launch should still honour what's on disk unless --provider
-	// or --model is passed again.
-	if providerOverride != "" {
+	// or --model is passed again. `ask resume` then falls back to the
+	// VS's LastProvider so resuming a Claude conversation while the
+	// saved default is Codex doesn't reopen with the wrong backend.
+	// Explicit --provider always wins; an unknown stored LastProvider
+	// is warned about and ignored.
+	switch {
+	case providerOverride != "":
 		cfg.Provider = providerOverride
+	case resumeProvider != "":
+		if strictProviderByID(resumeProvider) != nil {
+			cfg.Provider = resumeProvider
+		} else {
+			fmt.Fprintf(os.Stderr,
+				"ask resume: stored provider %q is no longer registered, falling back to %q\n",
+				resumeProvider, cfg.Provider)
+		}
 	}
 	first, err := newTab(1, cfg)
 	if err != nil {
