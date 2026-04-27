@@ -182,6 +182,16 @@ func (a app) quit() (tea.Model, tea.Cmd) {
 			t.mcpBridge.stop()
 		}
 	}
+	// Mirror closeTab's last-tab path: arm the inline "last session: …"
+	// hint off the active tab's VS id so Ctrl+D and other quit() callers
+	// reach the same exit screen as closing the final tab. Empty VS id
+	// skips the flag, leaving the altscreen exit silent as before.
+	if a.active >= 0 && a.active < len(a.tabs) {
+		if vid := a.tabs[a.active].virtualSessionID; vid != "" {
+			a.quitting = true
+			a.quittingVID = vid
+		}
+	}
 	return a, tea.Quit
 }
 

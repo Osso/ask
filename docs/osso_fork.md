@@ -389,6 +389,11 @@ user just meant to exit shell mode.
   3. Otherwise, fall through to `quit`, which drains pending replies, kills
      provider and shell subprocesses, and stops each tab's MCP bridge before
      returning `tea.Quit`.
+- `quit` also arms `a.quitting` / `a.quittingVID` from the active tab's
+  `virtualSessionID` (mirroring the last-tab branch in `closeTab`), so
+  Ctrl+D on the last tab reaches the same inline "last session: …"
+  exit screen as closing the final tab. Empty VS id leaves the flag
+  disarmed and the altscreen exit silent.
 - `Ctrl+C` twice on an empty idle prompt remains the tab-close path.
 
 **Key files.**

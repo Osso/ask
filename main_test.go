@@ -541,6 +541,56 @@ func TestCloseTab_NonLastTabDoesNotArmQuitting(t *testing.T) {
 	}
 }
 
+// Ctrl+D on the only tab must reach the same exit screen as closing
+// the last tab — including arming the quitting flag with the active
+// VS id so the host shell sees "last session: <vid>" in scrollback.
+func TestHandleCtrlD_LastTabArmsQuittingWithVID(t *testing.T) {
+	tab := newTabModelStub(t, 1, "vs-ctrl-d")
+	a := app{tabs: []*model{tab}, active: 0}
+
+	newA, cmd := a.handleCtrlD()
+	a2, ok := newA.(app)
+	if !ok {
+		t.Fatalf("handleCtrlD returned %T, want app", newA)
+	}
+	if cmd == nil {
+		t.Fatal("Ctrl+D on the only tab must return a quit cmd")
+	}
+	if msg := cmd(); msg != (tea.QuitMsg{}) {
+		t.Errorf("cmd should yield tea.QuitMsg{}, got %T %+v", msg, msg)
+	}
+	if !a2.quitting {
+		t.Error("Ctrl+D on the only tab must arm quitting before tea.Quit")
+	}
+	if a2.quittingVID != "vs-ctrl-d" {
+		t.Errorf("quittingVID=%q want vs-ctrl-d", a2.quittingVID)
+	}
+	view := a2.View()
+	if view.AltScreen {
+		t.Error("Ctrl+D quit View must have AltScreen=false (inline)")
+	}
+	if !strings.Contains(view.Content, "last session: vs-ctrl-d") {
+		t.Errorf("Ctrl+D quit View content=%q must announce the vsID", view.Content)
+	}
+}
+
+func TestHandleCtrlD_LastTabNoVIDLeavesQuittingDisarmed(t *testing.T) {
+	tab := newTabModelStub(t, 1, "")
+	a := app{tabs: []*model{tab}, active: 0}
+
+	newA, cmd := a.handleCtrlD()
+	a2 := newA.(app)
+	if cmd == nil {
+		t.Fatal("Ctrl+D on the only tab must still return tea.Quit")
+	}
+	if a2.quitting {
+		t.Error("no vsID → Ctrl+D must not arm the inline render path")
+	}
+	if a2.quittingVID != "" {
+		t.Errorf("quittingVID should stay empty, got %q", a2.quittingVID)
+	}
+}
+
 // newTabModelStub returns a minimal *model just rich enough for the
 // app-level close/View tests to read its virtualSessionID and run
 // killProc/drainPendingReplies as no-ops; full model wiring
