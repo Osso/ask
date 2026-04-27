@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -59,9 +62,11 @@ type askToolRequestMsg struct {
 }
 
 type approvalIn struct {
-	ToolName  string         `json:"tool_name"`
-	Input     map[string]any `json:"input"`
-	ToolUseID string         `json:"tool_use_id,omitempty"`
+	ToolName             string           `json:"tool_name"`
+	Input                map[string]any   `json:"input"`
+	ToolUseID            string           `json:"tool_use_id,omitempty"`
+	PermissionSuggestions []map[string]any `json:"permission_suggestions,omitempty"`
+	BlockedPath          string           `json:"blocked_path,omitempty"`
 }
 
 // permissionRule mirrors the Claude Code permission-rule wire shape:
@@ -309,6 +314,25 @@ func (b *mcpBridge) approvalTool(ctx context.Context, req *mcp.CallToolRequest) 
 			Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
 		}, nil
 	}
+	verdict, reason, err := decideViaBashHook(ctx, in)
+	if err == nil {
+		switch verdict {
+		case "safe":
+			body := buildApprovalBody(true, in.Input, nil)
+			debugLog("approval_prompt bash-hook safe tool=%s reason=%q", in.ToolName, reason)
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(body)}}}, nil
+		case "unsafe":
+			body := buildDenyBody(reason)
+			debugLog("approval_prompt bash-hook unsafe tool=%s reason=%q", in.ToolName, reason)
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(body)}}}, nil
+		case "unsure":
+			// fall through to the modal
+		default:
+			debugLog("approval_prompt bash-hook unknown verdict=%q; falling through", verdict)
+		}
+	} else {
+		debugLog("approval_prompt bash-hook unreachable err=%v; falling through to modal", err)
+	}
 	p := teaProgramPtr.Load()
 	if p == nil {
 		return nil, errors.New("ask UI not ready")
@@ -410,6 +434,55 @@ func buildApprovalBody(allow bool, input map[string]any, remember *permissionRul
 	}
 	body, _ := json.Marshal(decision)
 	return body
+}
+
+// buildDenyBody returns the deny decision body for the given reason message.
+func buildDenyBody(message string) []byte {
+	if message == "" {
+		message = "denied by bash-hook"
+	}
+	body, _ := json.Marshal(map[string]any{"behavior": "deny", "message": message})
+	return body
+}
+
+const bashHookTimeout = 5 * time.Second
+
+// decideViaBashHook shells out to `claude-bash-hook-approval decide` and
+// returns the verdict ("safe", "unsafe", "unsure") and reason. Returns
+// os.ErrNotExist when the binary is not on PATH; caller treats as unsure.
+func decideViaBashHook(ctx context.Context, in approvalIn) (verdict string, reason string, err error) {
+	bin, err := exec.LookPath("claude-bash-hook-approval")
+	if err != nil {
+		return "", "", os.ErrNotExist
+	}
+	cwd, _ := os.Getwd()
+	payload := map[string]any{
+		"tool_name":             in.ToolName,
+		"input":                 in.Input,
+		"cwd":                   cwd,
+		"permission_suggestions": in.PermissionSuggestions,
+		"blocked_path":          in.BlockedPath,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", "", err
+	}
+	tctx, cancel := context.WithTimeout(ctx, bashHookTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(tctx, bin, "decide")
+	cmd.Stdin = bytes.NewReader(append(data, '\n'))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", "", err
+	}
+	var result struct {
+		Verdict string `json:"verdict"`
+		Reason  string `json:"reason"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out), &result); err != nil {
+		return "", "", err
+	}
+	return result.Verdict, result.Reason, nil
 }
 
 func (b *mcpBridge) pingProgress(ctx context.Context, sess *mcp.ServerSession, token any, done <-chan struct{}) {
