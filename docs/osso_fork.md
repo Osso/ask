@@ -887,6 +887,47 @@ the override still lands before the first provider session starts.
 
 ---
 
+## 24. CLI worktree override
+
+**Purpose.** Let users enable worktree mode for a single launch without
+opening `/config` or editing `ask.json`. Useful for shell aliases that want
+worktree isolation regardless of the persisted default.
+
+**Behavior details worth preserving.**
+- `-w` and `--worktree` both set `cfg.UI.Worktree = &true` for the current
+  run. There is no value form and no `--no-worktree` opt-out: when the flag
+  is absent the saved config is the source of truth.
+- The override is applied **after** `saveConfig(cfg)` runs so it never
+  persists, matching the `--provider` / `--model` precedent.
+- The override lands **before** the startup `ensureWorktreeGitignore()`
+  guard so the `.gitignore` is set up for this run when the flag flips a
+  previously-disabled config to enabled.
+- New tabs spawned in-session (Ctrl+N) call `loadConfig()` fresh, so they
+  see the saved value, not the launch override. This matches `--provider` /
+  `--model` and is intentional — persistence is what `/config` is for.
+- `parseWorktreeFlag` runs before `parseCLICommand`, alongside
+  `parseSimulateApprovalFlag` and `parseProviderModelFlags`, so the new
+  flag does not trip the unknown-option check.
+- Help text in `printHelp` documents `-w, --worktree` under the
+  `Options:` section.
+
+**Key files.**
+- `main.go` (`parseWorktreeFlag`, `printHelp`, `main` dispatch)
+- `main_test.go` (`TestParseWorktreeFlag`,
+  `TestPrintHelp_MentionsKeyCommands`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'ParseWorktreeFlag|PrintHelp'`
+- `go test ./...`
+
+**Rebase risk.** Low. Self-contained to `main()` and one helper. If
+upstream restructures how `cfg.UI.Worktree` is consumed (or splits the
+`uiConfig` struct), re-check that the override still lands before the
+first `ensureWorktreeGitignore()` call and before `newTab` reads the
+config.
+
+---
+
 ## 18. CLI option validation
 
 **Purpose.** Reject unknown CLI flags and subcommands at startup with an error

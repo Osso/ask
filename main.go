@@ -168,6 +168,8 @@ Options:
                                  Accepts any value the provider's /model
                                  picker would accept (including custom ids).
                                  Does not persist.
+  -w, --worktree                 enable worktree mode for this launch. Does
+                                 not persist; toggle in /config to save.
 
 Debug:
   --simulate-approval[=<tool>]   open the approval modal at startup with a
@@ -241,6 +243,25 @@ func parseSimulateApprovalFlag(args []string) (bool, string, []string) {
 		}
 	}
 	return enabled, tool, rest
+}
+
+// parseWorktreeFlag scans args for `-w` / `--worktree` and returns
+// whether it was present plus the remaining args with the flag stripped.
+// Pure helper so the parsing path is unit-testable. The flag is a
+// pure boolean: there is no value form, and no `--no-worktree` opt-out
+// — the saved config is the source of truth when the flag is absent.
+func parseWorktreeFlag(args []string) (bool, []string) {
+	enabled := false
+	rest := make([]string, 0, len(args))
+	for _, a := range args {
+		switch a {
+		case "-w", "--worktree":
+			enabled = true
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return enabled, rest
 }
 
 // parseProviderModelFlags pulls `--provider <id>` / `--provider=<id>`
@@ -379,6 +400,7 @@ func main() {
 		return
 	}
 	simulateApproval, simulateApprovalTool, args := parseSimulateApprovalFlag(os.Args[1:])
+	worktreeOverride, args := parseWorktreeFlag(args)
 	providerOverride, modelOverride, args, err := parseProviderModelFlags(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ask:", err)
@@ -418,6 +440,10 @@ func main() {
 	}
 	cfg, _ := loadConfig()
 	_ = saveConfig(cfg)
+	if worktreeOverride {
+		t := true
+		cfg.UI.Worktree = &t
+	}
 	if cfg.UI.Worktree != nil && *cfg.UI.Worktree {
 		ensureWorktreeGitignore()
 	}

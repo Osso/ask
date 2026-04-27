@@ -177,7 +177,7 @@ func TestPrintHelp_MentionsKeyCommands(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf)
 	out := buf.String()
-	for _, want := range []string{"ask resume", "--help", "vs-", "--simulate-approval", "--provider", "--model"} {
+	for _, want := range []string{"ask resume", "--help", "vs-", "--simulate-approval", "--provider", "--model", "--worktree", "-w"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing %q\n%s", want, out)
 		}
@@ -236,6 +236,57 @@ func TestParseSimulateApprovalFlag(t *testing.T) {
 			}
 			if gotTool != tc.wantTool {
 				t.Errorf("tool=%q want %q", gotTool, tc.wantTool)
+			}
+			if !equalStrSlice(gotRest, tc.wantRest) {
+				t.Errorf("rest=%v want %v", gotRest, tc.wantRest)
+			}
+		})
+	}
+}
+
+func TestParseWorktreeFlag(t *testing.T) {
+	cases := []struct {
+		name     string
+		args     []string
+		wantOn   bool
+		wantRest []string
+	}{
+		{
+			name:     "absent",
+			args:     []string{"resume", "vs-abc"},
+			wantOn:   false,
+			wantRest: []string{"resume", "vs-abc"},
+		},
+		{
+			name:     "long form",
+			args:     []string{"--worktree"},
+			wantOn:   true,
+			wantRest: []string{},
+		},
+		{
+			name:     "short form",
+			args:     []string{"-w"},
+			wantOn:   true,
+			wantRest: []string{},
+		},
+		{
+			name:     "mixed with positional is stripped",
+			args:     []string{"resume", "vs-1", "-w"},
+			wantOn:   true,
+			wantRest: []string{"resume", "vs-1"},
+		},
+		{
+			name:     "both forms together still strip both",
+			args:     []string{"-w", "resume", "--worktree", "vs-1"},
+			wantOn:   true,
+			wantRest: []string{"resume", "vs-1"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotOn, gotRest := parseWorktreeFlag(tc.args)
+			if gotOn != tc.wantOn {
+				t.Errorf("on=%v want %v", gotOn, tc.wantOn)
 			}
 			if !equalStrSlice(gotRest, tc.wantRest) {
 				t.Errorf("rest=%v want %v", gotRest, tc.wantRest)
