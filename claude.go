@@ -163,7 +163,7 @@ func claudeCLIArgs(args ProviderSessionArgs, probe bool) []string {
 			fmt.Sprintf(`{"mcpServers":{"ask":{"type":"http","url":"http://127.0.0.1:%d/"}}}`, args.MCPPort))
 		out = append(out, "--settings", claudeHookSettings(args.MCPPort))
 		if !probe {
-			out = append(out, "--permission-prompt-tool", "mcp__claude-bash-hook-approval__approval_prompt")
+			out = append(out, "--permission-prompt-tool", "mcp__ask__approval_prompt")
 		}
 	}
 	switch {

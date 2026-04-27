@@ -124,29 +124,50 @@ atomically.
 the `.gitignore` helper. Preserve the Lstat/symlink refusal and atomic rename
 even if surrounding worktree naming or pruning code changes.
 
-## 4. Claude permission approval MCP routing
+## 4. Claude permission approval orchestration
 
-**Purpose.** Route Claude Code permission prompts to the external
-`claude-bash-hook-approval` MCP approval tool rather than the embedded `ask`
-approval bridge.
+**Purpose.** ask owns the approval modal UI; claude-bash-hook is consulted
+as a subprocess for codex-driven SAFE/UNSAFE/UNSURE classification. ask is
+the only path to the user; bash-hook never speaks MCP back to Claude in
+this flow, which removes the elicitation/-p deadlock that the previous
+direct-routing version hit on UNSURE.
 
 **Behavior details worth preserving.**
-- Claude CLI argv passes:
-  `--permission-prompt-tool mcp__claude-bash-hook-approval__approval_prompt`.
-- The existing ask approval UI/schema remains available for providers and tests,
-  but Claude permission prompts are delegated to the external approval server.
+- Claude CLI argv passes
+  `--permission-prompt-tool mcp__ask__approval_prompt` (the embedded ask
+  MCP bridge), not the bash-hook MCP server.
+- `mcp.go::approvalTool` consults ask's `alwaysAllow` cache first, then
+  shells out to `claude-bash-hook-approval decide` (5s timeout,
+  `exec.LookPath` fallback). SAFE auto-allows, UNSAFE auto-denies with the
+  codex reason, UNSURE/error/missing-binary falls through to the modal.
+- `decideViaBashHook` payload includes `tool_name`, `input`, `cwd`,
+  `permission_suggestions`, and `blocked_path` so the SDK hints reach
+  codex via bash-hook's `build_prompt`.
+- `buildDenyBody(message)` produces the `{behavior:"deny",message:...}`
+  body for the UNSAFE branch.
+- Standalone Claude Code (no ask) keeps using
+  `mcp__claude-bash-hook-approval__approval_prompt` directly via shell
+  alias; that path is unchanged.
 
 **Key files.**
 - `claude.go` (`claudeCLIArgs`)
+- `mcp.go` (`approvalIn`, `approvalTool`, `decideViaBashHook`,
+  `buildDenyBody`)
 - `claude_cli_test.go`
+- `mcp_test.go` (`TestDecideViaBashHook_*`,
+  `TestApprovalTool_BashHook*`)
 
 **Tests to re-run after rebase.**
-- `go test ./... -run ClaudeCLIArgs`
+- `go test ./... -run 'ClaudeCLIArgs|DecideViaBashHook|ApprovalTool'`
 - `go test ./...`
 
-**Rebase risk.** Medium. Upstream provider-argument construction changes are
-common. Re-check the exact tool name after any Claude MCP or hook integration
-changes.
+**Rebase risk.** Medium-high. Touches both provider-argument construction
+and the MCP bridge handler. Re-check (a) the exact `--permission-prompt-tool`
+tool name, (b) that the bash-hook subprocess hand-off still uses the
+`decide` argv subcommand and the JSON wire shape documented in
+`approval_prompt.rs::run_decide_cli`, and (c) that the 5s timeout +
+LookPath fallback both still degrade to the modal rather than failing
+the call.
 
 ---
 
