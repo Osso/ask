@@ -634,7 +634,52 @@ moves the tab/program lifecycle, update `injectSimulatedApproval` accordingly.
 
 ---
 
-## 17. CLI option validation
+## 17. CLI provider/model overrides
+
+**Purpose.** Let users pick the provider and/or model for a single launch
+without editing config or opening the TUI's `/config` / `/provider` /
+`/model` flow. Useful for shell aliases, scripted launches, and
+ad-hoc model swaps.
+
+**Behavior details worth preserving.**
+- `--provider <id>` and `--provider=<id>` set `cfg.Provider` for the
+  current run only. Unknown ids exit with status 2 and an error listing
+  the registered ids; `strictProviderByID` does the lookup so the
+  fallback-to-first behavior of `providerByID` does not silently mask
+  typos. The override is applied **after** `saveConfig(cfg)` runs so it
+  never persists.
+- `--model <name>` and `--model=<name>` set `first.providerModel` after
+  `newTab` returns, so the override beats the provider's saved
+  settings without modifying them. No validation: the picker already
+  supports `AllowCustom`, so any string the picker would accept is
+  legal here too.
+- Bare `--provider` / `--model` (no value) and empty `--provider=` /
+  `--model=` are validation errors so a typo doesn't silently swallow
+  the next positional.
+- `parseProviderModelFlags` runs before `parseCLICommand` (alongside
+  `parseSimulateApprovalFlag`), so the new flags don't trip the
+  unknown-option check.
+- Help text in `printHelp` documents both flags under an `Options:`
+  section.
+
+**Key files.**
+- `main.go` (`parseProviderModelFlags`, `strictProviderByID`,
+  `registeredProviderIDs`, `printHelp`, `main` dispatch)
+- `main_test.go` (`TestParseProviderModelFlags`,
+  `TestStrictProviderByID`, `TestPrintHelp_MentionsKeyCommands`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'ParseProviderModelFlags|StrictProviderByID|PrintHelp'`
+- `go test ./...`
+
+**Rebase risk.** Low. The override path is contained to `main()` plus
+two helpers. If upstream changes how `cfg.Provider` is consumed by
+`newTab`, or how `providerModel` is stored on the model, re-check that
+the override still lands before the first provider session starts.
+
+---
+
+## 18. CLI option validation
 
 **Purpose.** Reject unknown CLI flags and subcommands at startup with an error
 message and the help text, instead of silently launching the TUI as if the user

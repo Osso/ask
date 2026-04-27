@@ -85,7 +85,7 @@ func TestPrintHelp_MentionsKeyCommands(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf)
 	out := buf.String()
-	for _, want := range []string{"ask resume", "--help", "vs-", "--simulate-approval"} {
+	for _, want := range []string{"ask resume", "--help", "vs-", "--simulate-approval", "--provider", "--model"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("help output missing %q\n%s", want, out)
 		}
@@ -149,6 +149,118 @@ func TestParseSimulateApprovalFlag(t *testing.T) {
 				t.Errorf("rest=%v want %v", gotRest, tc.wantRest)
 			}
 		})
+	}
+}
+
+func TestParseProviderModelFlags(t *testing.T) {
+	cases := []struct {
+		name         string
+		args         []string
+		wantProvider string
+		wantModel    string
+		wantRest     []string
+		wantErr      string
+	}{
+		{
+			name:     "absent leaves args untouched",
+			args:     []string{"resume", "vs-1"},
+			wantRest: []string{"resume", "vs-1"},
+		},
+		{
+			name:         "provider space form",
+			args:         []string{"--provider", "codex"},
+			wantProvider: "codex",
+			wantRest:     []string{},
+		},
+		{
+			name:         "provider equals form",
+			args:         []string{"--provider=codex"},
+			wantProvider: "codex",
+			wantRest:     []string{},
+		},
+		{
+			name:      "model space form",
+			args:      []string{"--model", "haiku"},
+			wantModel: "haiku",
+			wantRest:  []string{},
+		},
+		{
+			name:      "model equals form",
+			args:      []string{"--model=opus"},
+			wantModel: "opus",
+			wantRest:  []string{},
+		},
+		{
+			name:         "both flags mixed with positional",
+			args:         []string{"--provider", "claude", "resume", "vs-x", "--model=opus"},
+			wantProvider: "claude",
+			wantModel:    "opus",
+			wantRest:     []string{"resume", "vs-x"},
+		},
+		{
+			name:    "bare --provider errors",
+			args:    []string{"--provider"},
+			wantErr: "--provider: missing value",
+		},
+		{
+			name:    "empty --provider= errors",
+			args:    []string{"--provider="},
+			wantErr: "--provider: missing value",
+		},
+		{
+			name:    "bare --model errors",
+			args:    []string{"--model"},
+			wantErr: "--model: missing value",
+		},
+		{
+			name:    "empty --model= errors",
+			args:    []string{"--model="},
+			wantErr: "--model: missing value",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotProv, gotModel, gotRest, err := parseProviderModelFlags(tc.args)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("want error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err=%q want contains %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotProv != tc.wantProvider {
+				t.Errorf("provider=%q want %q", gotProv, tc.wantProvider)
+			}
+			if gotModel != tc.wantModel {
+				t.Errorf("model=%q want %q", gotModel, tc.wantModel)
+			}
+			if !equalStrSlice(gotRest, tc.wantRest) {
+				t.Errorf("rest=%v want %v", gotRest, tc.wantRest)
+			}
+		})
+	}
+}
+
+func TestStrictProviderByID(t *testing.T) {
+	a := newFakeProvider()
+	a.id = "alpha"
+	b := newFakeProvider()
+	b.id = "beta"
+	withRegisteredProviders(t, a, b)
+
+	if got := strictProviderByID("beta"); got == nil || got.ID() != "beta" {
+		t.Errorf("strictProviderByID(beta)=%v want beta", got)
+	}
+	if got := strictProviderByID("nope"); got != nil {
+		t.Errorf("strictProviderByID(nope)=%v want nil (no fallback)", got)
+	}
+	if got := strictProviderByID(""); got != nil {
+		t.Errorf("strictProviderByID(\"\")=%v want nil (no fallback)", got)
 	}
 }
 

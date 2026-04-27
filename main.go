@@ -143,6 +143,16 @@ func printHelp(w io.Writer) {
                      the TUI already attached to it
   ask --help         show this help
 
+Options:
+  --provider <id>                override the provider for this launch
+                                 (e.g. "claude", "codex"). Does not modify
+                                 the saved config; use /config or /provider
+                                 inside the TUI to persist a change.
+  --model <name>                 override the provider model for this launch.
+                                 Accepts any value the provider's /model
+                                 picker would accept (including custom ids).
+                                 Does not persist.
+
 Debug:
   --simulate-approval[=<tool>]   open the approval modal at startup with a
                                  synthetic <tool> request (default: Bash).
@@ -217,6 +227,71 @@ func parseSimulateApprovalFlag(args []string) (bool, string, []string) {
 	return enabled, tool, rest
 }
 
+// parseProviderModelFlags pulls `--provider <id>` / `--provider=<id>`
+// and `--model <name>` / `--model=<name>` out of args, returning the
+// extracted values plus the remaining args. Both flags require a
+// non-empty value; bare `--provider` or `--model` is an error so a
+// typo doesn't silently swallow the next positional argument.
+func parseProviderModelFlags(args []string) (provider, model string, rest []string, err error) {
+	rest = make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--provider":
+			if i+1 >= len(args) {
+				return "", "", nil, fmt.Errorf("--provider: missing value")
+			}
+			provider = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--provider="):
+			v := strings.TrimPrefix(a, "--provider=")
+			if v == "" {
+				return "", "", nil, fmt.Errorf("--provider: missing value")
+			}
+			provider = v
+		case a == "--model":
+			if i+1 >= len(args) {
+				return "", "", nil, fmt.Errorf("--model: missing value")
+			}
+			model = args[i+1]
+			i++
+		case strings.HasPrefix(a, "--model="):
+			v := strings.TrimPrefix(a, "--model=")
+			if v == "" {
+				return "", "", nil, fmt.Errorf("--model: missing value")
+			}
+			model = v
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return provider, model, rest, nil
+}
+
+// registeredProviderIDs returns the IDs of every provider currently
+// registered, in registration order. Used to format the error message
+// when --provider names something unknown.
+func registeredProviderIDs() []string {
+	ids := make([]string, 0, len(providerRegistry))
+	for _, p := range providerRegistry {
+		ids = append(ids, p.ID())
+	}
+	return ids
+}
+
+// strictProviderByID returns the provider with exactly this id, or nil.
+// Unlike providerByID it does NOT fall back to the first registered
+// provider, so callers can distinguish "unknown id" from "no providers
+// registered".
+func strictProviderByID(id string) Provider {
+	for _, p := range providerRegistry {
+		if p.ID() == id {
+			return p
+		}
+	}
+	return nil
+}
+
 // injectSimulatedApproval fires a synthetic approvalRequestMsg into the
 // running tea.Program so the in-app approval modal opens at startup. The
 // reply channel is buffered (size 1) and unread — the modal's send on
@@ -286,6 +361,18 @@ func main() {
 		return
 	}
 	simulateApproval, simulateApprovalTool, args := parseSimulateApprovalFlag(os.Args[1:])
+	providerOverride, modelOverride, args, err := parseProviderModelFlags(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ask:", err)
+		fmt.Fprintln(os.Stderr)
+		printHelp(os.Stderr)
+		os.Exit(2)
+	}
+	if providerOverride != "" && strictProviderByID(providerOverride) == nil {
+		fmt.Fprintf(os.Stderr, "ask: unknown provider %q (known: %s)\n",
+			providerOverride, strings.Join(registeredProviderIDs(), ", "))
+		os.Exit(2)
+	}
 	cmd, err := parseCLICommand(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ask:", err)
@@ -321,10 +408,19 @@ func main() {
 	} else {
 		usagePluginDir = dir
 	}
+	// CLI overrides apply after saveConfig so they don't persist; the
+	// next launch should still honour what's on disk unless --provider
+	// or --model is passed again.
+	if providerOverride != "" {
+		cfg.Provider = providerOverride
+	}
 	first, err := newTab(1, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ask: mcp:", err)
 		os.Exit(1)
+	}
+	if modelOverride != "" {
+		first.providerModel = modelOverride
 	}
 	if startupResumeVID != "" {
 		first.virtualSessionID = startupResumeVID
