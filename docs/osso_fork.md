@@ -685,6 +685,40 @@ moves the tab/program lifecycle, update `injectSimulatedApproval` accordingly.
 
 ---
 
+## 22. Ctrl+left/right word motion in the textarea
+
+**Purpose.** Bubbles' textarea defaults bind word motion only to
+`alt+left` / `alt+right`, but most terminals (kitty, ghostty,
+gnome-terminal, etc.) emit `ctrl+left` / `ctrl+right` for word jumps.
+Without this patch those keys insert literal characters or no-op,
+which feels broken in any normal editing flow.
+
+**Behavior details worth preserving.**
+- `newTab` extends the textarea KeyMap with extra keys after
+  `textarea.New()` returns:
+  - `WordForward`: `alt+right`, `alt+f`, `ctrl+right`
+  - `WordBackward`: `alt+left`, `alt+b`, `ctrl+left`
+  - `DeleteWordBackward`: `alt+backspace`, `ctrl+w`, `ctrl+backspace`
+  - `DeleteWordForward`: `alt+delete`, `alt+d`, `ctrl+delete`
+- The bubbles defaults stay in the binding so existing alt-based
+  muscle memory keeps working.
+- `InsertNewline` continues to be customised right above (this patch
+  shares the same block, so they should be re-applied together when
+  rebasing).
+
+**Key files.**
+- `main.go` (`newTab` textarea KeyMap setup)
+- `main_test.go` (`TestNewTab_TextareaBindsCtrlWordMotion`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run TextareaBindsCtrlWordMotion`
+- `go test ./...`
+
+**Rebase risk.** Low. Only adds entries to existing KeyMap fields; if
+upstream renames or moves the textarea KeyMap, follow that rename.
+
+---
+
 ## 21. Symlink-resolved Claude session dirs
 
 **Purpose.** Claude encodes its on-disk session-file path from the

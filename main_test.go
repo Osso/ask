@@ -126,6 +126,53 @@ func TestResumeLookup_EmptyWorkspaceErrors(t *testing.T) {
 	}
 }
 
+// newTab must wire ctrl+left/right (and ctrl+backspace/delete) into
+// the textarea keymap so word-motion editing works in the terminals
+// that send those sequences instead of the bubbles defaults
+// (alt+left/right).
+func TestNewTab_TextareaBindsCtrlWordMotion(t *testing.T) {
+	isolateHome(t)
+	t.Chdir(t.TempDir())
+	p := newFakeProvider()
+	p.id = "claude"
+	withRegisteredProviders(t, p)
+
+	tab, err := newTab(1, askConfig{Provider: "claude"})
+	if err != nil {
+		t.Fatalf("newTab: %v", err)
+	}
+	t.Cleanup(func() {
+		if tab.mcpBridge != nil {
+			tab.mcpBridge.stop()
+		}
+	})
+
+	cases := []struct {
+		name    string
+		binding []string
+		want    string
+	}{
+		{"WordForward", tab.input.KeyMap.WordForward.Keys(), "ctrl+right"},
+		{"WordBackward", tab.input.KeyMap.WordBackward.Keys(), "ctrl+left"},
+		{"DeleteWordBackward", tab.input.KeyMap.DeleteWordBackward.Keys(), "ctrl+backspace"},
+		{"DeleteWordForward", tab.input.KeyMap.DeleteWordForward.Keys(), "ctrl+delete"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var found bool
+			for _, k := range tc.binding {
+				if k == tc.want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("%s missing %q in keys=%v", tc.name, tc.want, tc.binding)
+			}
+		})
+	}
+}
+
 func TestPrintHelp_MentionsKeyCommands(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf)

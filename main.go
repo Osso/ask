@@ -59,6 +59,22 @@ func newTab(id int, cfg askConfig) (*model, error) {
 	ta.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("shift+enter", "ctrl+j"),
 	)
+	// Most terminals send ctrl+left/right for word motion; the bubbles
+	// default only binds alt+left/right. Add ctrl variants and the
+	// matching ctrl+backspace/delete word-deletion keys so editing
+	// feels native.
+	ta.KeyMap.WordForward = key.NewBinding(
+		key.WithKeys("alt+right", "alt+f", "ctrl+right"),
+	)
+	ta.KeyMap.WordBackward = key.NewBinding(
+		key.WithKeys("alt+left", "alt+b", "ctrl+left"),
+	)
+	ta.KeyMap.DeleteWordBackward = key.NewBinding(
+		key.WithKeys("alt+backspace", "ctrl+w", "ctrl+backspace"),
+	)
+	ta.KeyMap.DeleteWordForward = key.NewBinding(
+		key.WithKeys("alt+delete", "alt+d", "ctrl+delete"),
+	)
 	ta.SetHeight(3)
 	ta.Focus()
 
