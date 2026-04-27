@@ -928,6 +928,67 @@ config.
 
 ---
 
+## 25. OSC 7 cwd reporting in worktree mode
+
+**Purpose.** Tell the host terminal emulator (kitty, ghostty, wezterm,
+gnome-terminal, …) which directory to use as the "current cwd" so a
+new tab/split opened from the same window inherits the active ask
+tab's worktree path instead of the project root. Without this, a user
+running ask in worktree mode and opening a fresh terminal tab lands
+in the repo root every time, even though the live conversation is
+operating inside `.claude/worktrees/<name>`.
+
+**Behavior details worth preserving.**
+- `emitTermCwd(path)` writes a single OSC 7 sequence
+  (`ESC ] 7 ; file://<host>/<path> ESC \\`) directly to `/dev/tty` so
+  Bubble Tea's renderer cannot interleave with the report. Empty path
+  is a no-op.
+- `emitTermCwdFunc` is a package-level var so tests can capture the
+  emitted path without touching `/dev/tty`.
+- `(*model).effectiveCwd()` returns `worktreePath(m.cwd, m.worktreeName)`
+  when `worktreeName` is set, otherwise `m.cwd`. This is the path
+  reported via OSC 7.
+- `(app).syncTermCwd()` emits the active tab's effective cwd; called
+  once at startup from `main()` after `newApp(first)` so the very first
+  render already reports the right path.
+- `app.Update` wraps the existing dispatch (`dispatchUpdate`): it
+  snapshots the active tab's effective cwd before, runs the dispatch,
+  and emits OSC 7 only when the post-dispatch active tab's effective
+  cwd has actually changed. This catches /cd, shell-mode cwd capture,
+  /config worktree toggle, providerStartDoneMsg landing a new
+  worktreeName on the active tab, tab open/focus/close events, and any
+  future state mutation that flips effective cwd — without per-handler
+  bookkeeping.
+- A providerStartDoneMsg landing on an *inactive* tab does not emit,
+  because the active tab's effective cwd has not changed.
+- On exit the user's shell prompt naturally re-emits its own OSC 7,
+  so no shutdown-time restore is needed.
+
+**Key files.**
+- `term_cwd.go` (`emitTermCwdFunc`, `emitTermCwd`, `writeOSC7ToTTY`,
+  `(*model).effectiveCwd`, `(app).currentEffectiveCwd`,
+  `(app).syncTermCwd`)
+- `tabs.go` (`app.Update` diff wrapper, `app.dispatchUpdate`)
+- `main.go` (one-shot `a.syncTermCwd()` after `newApp`)
+- `term_cwd_test.go` (effectiveCwd selection, emitter stub plumbing,
+  emit-on-active-change vs no-emit-on-inactive-change, tab-switch
+  emit/no-emit)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'TermCwd|EffectiveCwd|EmitTermCwd|SyncTermCwd|AppUpdate_Emits|AppUpdate_DoesNotEmit'`
+- `go test ./...`
+
+**Rebase risk.** Low to medium. The diff wrapper sits at the top of
+`app.Update`. If upstream restructures the dispatch (e.g. moves
+message routing into `tea.Model` interface helpers, splits app vs
+tab updates, or adds a non-Update entry path that mutates
+`m.worktreeName` / `m.cwd`), make sure each new entry path either
+goes through `Update` or calls `a.syncTermCwd()` explicitly.
+`writeOSC7ToTTY` writes to `/dev/tty`; environments without one
+(CI, sandboxed runners) silently no-op, which is fine.
+
+---
+
 ## 18. CLI option validation
 
 **Purpose.** Reject unknown CLI flags and subcommands at startup with an error

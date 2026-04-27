@@ -484,6 +484,7 @@ func main() {
 		first.virtualSessionID = startupResumeVID
 	}
 	a := newApp(first)
+	a.syncTermCwd()
 	p := tea.NewProgram(a, tea.WithFPS(120))
 	setTeaProgram(p)
 	if simulateApproval {

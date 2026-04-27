@@ -94,6 +94,16 @@ func (a app) Init() tea.Cmd {
 }
 
 func (a app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	beforeCwd := a.currentEffectiveCwd()
+	newM, cmd := a.dispatchUpdate(msg)
+	if a2, ok := newM.(app); ok && a2.currentEffectiveCwd() != beforeCwd {
+		a2.syncTermCwd()
+		return a2, cmd
+	}
+	return newM, cmd
+}
+
+func (a app) dispatchUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
 	case closeTabMsg:
 		return a.closeTab(m.tabID)
