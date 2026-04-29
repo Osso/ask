@@ -1182,6 +1182,37 @@ to lift wholesale.
 
 ---
 
+## 29. Allow bracketed paste during a turn
+
+**Purpose.** Pasting into the composer while a provider turn is in flight
+was silently dropped — the `tea.PasteMsg` handler gated on `!m.busy`,
+even though typed keys land in the input regardless of busy state. The
+inconsistency just lost the user's text. Now pastes fall through the
+same composer path as typed keys.
+
+**Behavior details worth preserving.**
+- `tea.PasteMsg` handler keeps the `m.mode == modeInput` check (modal
+  screens — session picker, ask question, approval, config, provider
+  switch — still route paste through their own dispatchers below) but
+  drops the `!m.busy` guard.
+- Typed keys at `update.go:926` already run `m.input.Update(msg)`
+  unconditionally, so this just brings the paste path into line.
+- Image paste (`Ctrl+V` → `pasteImageCmd`) was already busy-tolerant at
+  both the dispatch and `imagePastedMsg` handler; no change there.
+
+**Key files.**
+- `update.go` (`tea.PasteMsg` handler in `Update`)
+- `update_test.go` (`TestUpdate_PasteMsgLandsInInputWhileBusy`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'PasteMsgLandsInInput'`
+- `go test ./...`
+
+**Rebase risk.** Low. Single-line gate change. Upstream issue is filed
+(`Cidan/ask#1`); drop this patch if upstream merges its own fix.
+
+---
+
 ## Full verification
 
 Before declaring a rebase complete:

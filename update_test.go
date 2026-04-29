@@ -471,6 +471,20 @@ func TestUpdate_ToolCallMsgDroppedWhenQuiet(t *testing.T) {
 	}
 }
 
+func TestUpdate_PasteMsgLandsInInputWhileBusy(t *testing.T) {
+	// Bracketed-paste while a turn is in flight previously got dropped
+	// (the !m.busy gate), even though typed keys are accepted into the
+	// composer in the same state. Pastes now fall through the same path.
+	m := newTestModel(t, newFakeProvider())
+	m.proc = &providerProc{}
+	m.busy = true
+	m.input.Focus()
+	m2, _ := runUpdate(t, m, tea.PasteMsg{Content: "queued follow-up"})
+	if got := m2.input.Value(); got != "queued follow-up" {
+		t.Errorf("paste should land in input even while busy; got %q", got)
+	}
+}
+
 func TestUpdate_ToolCallMsgShortFiltersInputs(t *testing.T) {
 	// Short Bash collapses to a single ▸ <summary> line via
 	// summarizeShellCommand. `ls` renders as `list` (intent verb), and

@@ -628,7 +628,10 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		return m, cmd
 
 	case tea.PasteMsg:
-		if m.mode == modeInput && !m.busy {
+		// Allow pastes mid-turn — typed keys at line 926 also land in
+		// the input while busy, so dropping pastes is just an
+		// inconsistency that loses the user's text.
+		if m.mode == modeInput {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			m.refreshPathMatches()
