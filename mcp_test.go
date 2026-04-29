@@ -911,13 +911,19 @@ func TestRunPersistRule_NoBinaryIsSilentNoop(t *testing.T) {
 
 // timeAfter returns a deadline channel for a 2s wait that flags the test
 // with t.Errorf when reached. Used so async-completion assertions don't
-// hang the suite if a goroutine never fires.
+// hang the suite if a goroutine never fires. The watchdog goroutine is
+// cancelled via t.Cleanup so it can't t.Errorf after the test finishes.
 func timeAfter(t *testing.T, msg string) <-chan time.Time {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
 	go func() {
-		<-deadline
-		t.Errorf("timeout: %s", msg)
+		select {
+		case <-deadline:
+			t.Errorf("timeout: %s", msg)
+		case <-stop:
+		}
 	}()
 	return deadline
 }

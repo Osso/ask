@@ -72,30 +72,44 @@ deserializes user/model-provided payloads.
 
 ---
 
-## 2. Shell subprocess credential filtering
+## 2. Subprocess credential filtering
 
-**Purpose.** Shell mode runs arbitrary user commands. It must not inherit
-Claude/Anthropic credentials from the `ask` process environment.
+**Purpose.** Neither shell mode nor the Claude provider should inherit
+Anthropic credentials from the host shell. Shell mode runs arbitrary user
+commands and must not leak the keys; the Claude provider must let claude
+fall back to its stored subscription credentials so a user-exported
+`ANTHROPIC_API_KEY` does not silently bill the API instead of the Pro/Max
+plan.
 
 **Behavior details worth preserving.**
 - Shell commands use `cmd.Env = shellEnv()` instead of inheriting `os.Environ`
-  implicitly.
-- `shellEnv` strips `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`,
+  implicitly. `shellEnv` strips `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`,
   `ANTHROPIC_BASE_URL`, `CLAUDE_APP_SECRET`, and `MCP_TIMEOUT`.
-- The rest of the environment is preserved so normal shell mode behavior
-  remains unchanged.
+- The Claude provider's `claudeEnv` strips `ANTHROPIC_API_KEY`,
+  `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_BASE_URL` from the inherited
+  environment. Without this, an exported `ANTHROPIC_API_KEY` (common when
+  the user runs ask from inside another Claude Code session) takes
+  precedence over the subscription auth that claude reads from
+  `~/.claude.json`.
+- Ollama mode strips first, then re-injects `ANTHROPIC_BASE_URL` and
+  `ANTHROPIC_AUTH_TOKEN=ollama`, so a stale host token cannot leak into
+  the local ollama route either.
+- The rest of the environment is preserved so normal shell-mode and
+  provider behavior remain unchanged.
 
 **Key files.**
 - `shell.go` (`startShellCmd`, `shellEnv`)
+- `claude.go` (`claudeEnv`)
 
 **Tests to re-run after rebase.**
 - `go test ./...`
-- Add/keep a focused test if this area changes: set blocked env vars and assert
-  `shellEnv()` omits only those keys.
+- Focused: `go test ./... -run 'ClaudeEnv|ShellEnv'`
 
 **Rebase risk.** Low to medium. Upstream shell-mode work often touches
 `startShellCmd`; make sure future refactors do not accidentally return to
-implicit environment inheritance.
+implicit environment inheritance. Same applies to `claudeEnv` — any
+upstream change that swaps it for a plain `os.Environ()` reintroduces the
+API-key-over-subscription regression.
 
 ---
 

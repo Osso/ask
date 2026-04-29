@@ -129,8 +129,23 @@ const mcpTimeoutMillis = "86400000"
 
 // claudeEnv returns the claude subprocess environment, routing Anthropic
 // traffic through a local ollama host when model == "ollama".
+//
+// ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL are
+// scrubbed from the inherited environment so claude falls back to the
+// subscription credentials stored in ~/.claude.json instead of billing
+// against an API key that happens to be exported in the user's shell.
 func claudeEnv(args ProviderSessionArgs) []string {
-	env := append(os.Environ(), "MCP_TIMEOUT="+mcpTimeoutMillis)
+	src := os.Environ()
+	env := make([]string, 0, len(src)+3)
+	for _, kv := range src {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL":
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, "MCP_TIMEOUT="+mcpTimeoutMillis)
 	if strings.EqualFold(args.Model, "ollama") {
 		env = append(env,
 			"ANTHROPIC_BASE_URL="+ollamaBaseURL(args.OllamaHost),

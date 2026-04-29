@@ -132,10 +132,10 @@ func TestAppUpdate_EmitsOnTabSwitchWhenEffectiveCwdDiffers(t *testing.T) {
 	a.tabs[1].worktreeName = "shimmering-flying-crow"
 	a.active = 0
 
-	newM, _ := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: tea.KeyRight})
+	newM, _ := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl | tea.ModShift, Code: tea.KeyPgDown})
 	a2 := newM.(app)
 	if a2.active != 1 {
-		t.Fatalf("ctrl+right should focus tab 2, active=%d", a2.active)
+		t.Fatalf("ctrl+shift+pgdown should focus tab 2, active=%d", a2.active)
 	}
 	if len(*captured) != 1 {
 		t.Fatalf("tab switch with differing effective cwd should emit once, got %v", *captured)
@@ -153,10 +153,10 @@ func TestAppUpdate_DoesNotEmitOnTabSwitchWhenEffectiveCwdMatches(t *testing.T) {
 	a.tabs[1].cwd = "/repo"
 	a.active = 0
 
-	newM, _ := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl, Code: tea.KeyRight})
+	newM, _ := a.Update(tea.KeyPressMsg{Mod: tea.ModCtrl | tea.ModShift, Code: tea.KeyPgDown})
 	a2 := newM.(app)
 	if a2.active != 1 {
-		t.Fatalf("ctrl+right should focus tab 2, active=%d", a2.active)
+		t.Fatalf("ctrl+shift+pgdown should focus tab 2, active=%d", a2.active)
 	}
 	if len(*captured) != 0 {
 		t.Errorf("tab switch with same effective cwd must not emit, got %v", *captured)

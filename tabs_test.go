@@ -212,7 +212,6 @@ func TestApp_CtrlTDoesNotOpenNewTab(t *testing.T) {
 	}
 }
 
-
 func TestApp_HistoryLoadedStaysOnOwningTab(t *testing.T) {
 	a := testAppWithTwoTabs(t)
 	a.tabs[0].sessionID = "shared"
@@ -258,58 +257,68 @@ func TestApp_ProviderInitLoadedStaysOnOwningTab(t *testing.T) {
 }
 
 func TestApp_CtrlZSuspendsAndRendersInlineBackgroundedMessage(t *testing.T) {
-	a := testAppWithTwoTabs(t)
-	a.tabs[0].input.SetValue("inactive draft")
-	a.tabs[1].input.SetValue("active draft")
+	for _, tc := range []struct {
+		name string
+		msg  tea.KeyPressMsg
+	}{
+		{name: "mod-ctrl-z", msg: tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}},
+		{name: "raw-ctrl-code", msg: tea.KeyPressMsg{Code: 0x1A}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := testAppWithTwoTabs(t)
+			a.tabs[0].input.SetValue("inactive draft")
+			a.tabs[1].input.SetValue("active draft")
 
-	newA, cmd := a.Update(tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
-	a2, ok := newA.(app)
-	if !ok {
-		t.Fatalf("Update returned %T, want app", newA)
-	}
+			newA, cmd := a.Update(tc.msg)
+			a2, ok := newA.(app)
+			if !ok {
+				t.Fatalf("Update returned %T, want app", newA)
+			}
 
-	if cmd == nil {
-		t.Fatal("Ctrl+Z must return tea.Suspend; got nil cmd")
-	}
-	if msg := cmd(); msg != (tea.SuspendMsg{}) {
-		t.Errorf("cmd should yield tea.SuspendMsg{}, got %T %+v", msg, msg)
-	}
-	if !a2.suspending {
-		t.Error("app.suspending must be true between Ctrl+Z and ResumeMsg")
-	}
+			if cmd == nil {
+				t.Fatal("Ctrl+Z must return tea.Suspend; got nil cmd")
+			}
+			if msg := cmd(); msg != (tea.SuspendMsg{}) {
+				t.Errorf("cmd should yield tea.SuspendMsg{}, got %T %+v", msg, msg)
+			}
+			if !a2.suspending {
+				t.Error("app.suspending must be true between Ctrl+Z and ResumeMsg")
+			}
 
-	// View while suspending must render *inline* (no altscreen), so
-	// the message lands in the user's terminal scrollback once
-	// bubbletea exits altscreen and SIGTSTP fires.
-	view := a2.View()
-	if view.AltScreen {
-		t.Error("suspending View must have AltScreen=false to print to the host terminal")
-	}
-	if !strings.Contains(view.Content, "backgrounded") {
-		t.Errorf("suspending View content=%q must mention 'backgrounded'", view.Content)
-	}
-	if !strings.Contains(view.Content, "fg") {
-		t.Errorf("suspending View content=%q should hint at `fg` resume", view.Content)
-	}
+			// View while suspending must render *inline* (no altscreen), so
+			// the message lands in the user's terminal scrollback once
+			// bubbletea exits altscreen and SIGTSTP fires.
+			view := a2.View()
+			if view.AltScreen {
+				t.Error("suspending View must have AltScreen=false to print to the host terminal")
+			}
+			if !strings.Contains(view.Content, "backgrounded") {
+				t.Errorf("suspending View content=%q must mention 'backgrounded'", view.Content)
+			}
+			if !strings.Contains(view.Content, "fg") {
+				t.Errorf("suspending View content=%q should hint at `fg` resume", view.Content)
+			}
 
-	// Neither tab's history should be touched — the message lives in
-	// the shell, not in ask.
-	for i, tb := range a2.tabs {
-		if len(tb.history) != 0 {
-			t.Errorf("tab %d history must stay empty; got %+v", i, tb.history)
-		}
-	}
+			// Neither tab's history should be touched — the message lives in
+			// the shell, not in ask.
+			for i, tb := range a2.tabs {
+				if len(tb.history) != 0 {
+					t.Errorf("tab %d history must stay empty; got %+v", i, tb.history)
+				}
+			}
 
-	// The keypress must be consumed by the app, not forwarded to the
-	// active tab's textarea — otherwise a stray 'z' would land in the
-	// input on every suspend.
-	active := a2.tabs[a2.active]
-	inactive := a2.tabs[1-a2.active]
-	if got := active.input.Value(); got != "active draft" {
-		t.Errorf("active tab input mutated by Ctrl+Z: got %q want %q", got, "active draft")
-	}
-	if got := inactive.input.Value(); got != "inactive draft" {
-		t.Errorf("inactive tab input mutated by Ctrl+Z: got %q want %q", got, "inactive draft")
+			// The keypress must be consumed by the app, not forwarded to the
+			// active tab's textarea — otherwise a stray 'z' would land in the
+			// input on every suspend.
+			active := a2.tabs[a2.active]
+			inactive := a2.tabs[1-a2.active]
+			if got := active.input.Value(); got != "active draft" {
+				t.Errorf("active tab input mutated by Ctrl+Z: got %q want %q", got, "active draft")
+			}
+			if got := inactive.input.Value(); got != "inactive draft" {
+				t.Errorf("inactive tab input mutated by Ctrl+Z: got %q want %q", got, "inactive draft")
+			}
+		})
 	}
 }
 
@@ -318,15 +327,25 @@ func TestApp_CtrlZSuspendsAndRendersInlineBackgroundedMessage(t *testing.T) {
 // for "any non-input mode" — the dispatch happens at the app layer
 // before mode-specific routing, so all of them share the same gate.
 func TestApp_CtrlZSuspendsRegardlessOfActiveTabMode(t *testing.T) {
-	a := testAppWithTwoTabs(t)
-	a.tabs[a.active].mode = modeAskQuestion
+	for _, tc := range []struct {
+		name string
+		msg  tea.KeyPressMsg
+	}{
+		{name: "mod-ctrl-z", msg: tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl}},
+		{name: "raw-ctrl-code", msg: tea.KeyPressMsg{Code: 0x1A}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a := testAppWithTwoTabs(t)
+			a.tabs[a.active].mode = modeAskQuestion
 
-	_, cmd := a.Update(tea.KeyPressMsg{Code: 'z', Mod: tea.ModCtrl})
-	if cmd == nil {
-		t.Fatal("Ctrl+Z in modal mode must still return tea.Suspend")
-	}
-	if msg := cmd(); msg != (tea.SuspendMsg{}) {
-		t.Errorf("cmd should yield tea.SuspendMsg{}, got %T", msg)
+			_, cmd := a.Update(tc.msg)
+			if cmd == nil {
+				t.Fatal("Ctrl+Z in modal mode must still return tea.Suspend")
+			}
+			if msg := cmd(); msg != (tea.SuspendMsg{}) {
+				t.Errorf("cmd should yield tea.SuspendMsg{}, got %T", msg)
+			}
+		})
 	}
 }
 

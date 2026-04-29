@@ -118,7 +118,7 @@ func (a app) dispatchUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a.broadcastResize()
 
 	case tea.KeyPressMsg:
-		if m.Mod == tea.ModCtrl && m.Code == 'z' {
+		if isCtrlKey(m, 'z') {
 			return a.suspendApp()
 		}
 		if isCtrlKey(m, 'd') {

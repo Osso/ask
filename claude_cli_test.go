@@ -271,13 +271,37 @@ func TestClaudeEnv_NonOllamaOmitsOverride(t *testing.T) {
 		t.Errorf("ANTHROPIC_BASE_URL should not be injected for non-ollama models")
 	}
 	if hasEnvPrefix(env, "ANTHROPIC_AUTH_TOKEN=") {
-		// Host may already have one — only error if claudeEnv itself added it.
-		// Check that it is not literally the ollama fingerprint value.
-		for _, kv := range env {
-			if kv == "ANTHROPIC_AUTH_TOKEN=ollama" {
-				t.Errorf("claudeEnv should not inject ANTHROPIC_AUTH_TOKEN=ollama for non-ollama model")
-			}
+		t.Errorf("ANTHROPIC_AUTH_TOKEN should be stripped for non-ollama models")
+	}
+}
+
+func TestClaudeEnv_StripsAnthropicCredentials(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-leaked")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "host-token")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://example.invalid")
+	env := claudeEnv(ProviderSessionArgs{Model: "opus"})
+	for _, kv := range env {
+		key, _, _ := strings.Cut(kv, "=")
+		switch key {
+		case "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL":
+			t.Errorf("claudeEnv must strip %q so claude uses subscription auth; got %q", key, kv)
 		}
+	}
+}
+
+func TestClaudeEnv_OllamaStripsThenInjects(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-leaked")
+	t.Setenv("ANTHROPIC_AUTH_TOKEN", "host-token")
+	t.Setenv("ANTHROPIC_BASE_URL", "https://example.invalid")
+	env := claudeEnv(ProviderSessionArgs{Model: "ollama", OllamaHost: "localhost:11434"})
+	if hasEnv(env, "ANTHROPIC_API_KEY=sk-ant-leaked") {
+		t.Errorf("ANTHROPIC_API_KEY must be stripped even in ollama mode")
+	}
+	if !hasEnv(env, "ANTHROPIC_AUTH_TOKEN=ollama") {
+		t.Errorf("ollama mode must inject ANTHROPIC_AUTH_TOKEN=ollama after stripping host token")
+	}
+	if !hasEnv(env, "ANTHROPIC_BASE_URL=http://localhost:11434") {
+		t.Errorf("ollama mode must inject ANTHROPIC_BASE_URL after stripping host base url")
 	}
 }
 
