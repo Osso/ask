@@ -203,6 +203,25 @@ func renderToolCallActionsBlock(name string, actions []map[string]any, mode tool
 	return strings.Join(lines, "\n")
 }
 
+// summarizeCommandActions collapses parsed Codex commandActions into the
+// same short display text used by the action renderer. It keeps the live
+// status line aligned with the history rendering.
+func summarizeCommandActions(actions []map[string]any) string {
+	rendered := compactCommandActions(actions)
+	if len(rendered) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(rendered))
+	for _, a := range rendered {
+		text := a.title
+		if a.body != "" {
+			text += " " + a.body
+		}
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, " · ")
+}
+
 // renderedCommandAction is one display row produced from one or more
 // CommandAction entries. title is the leading verb ("read", "search",
 // "git", …) and body is the remainder ("foo.go, bar.go", "TODO in src/",

@@ -93,6 +93,24 @@ func TestCodexEventToMsgs_CommandExecutionStatusTruncated(t *testing.T) {
 	}
 }
 
+func TestCodexEventToMsgs_CommandExecutionStatusUsesActions(t *testing.T) {
+	proc := &providerProc{}
+	ev := parseCodexEvent(t, `{"method":"item/started","params":{"item":{"type":"commandExecution","id":"c","command":"/usr/bin/zsh -lc 'git status'","commandActions":[{"type":"unknown","command":"git status"},{"type":"read","name":"main.go"}]}}}`)
+	msgs := codexEventToMsgs(ev, proc)
+	if len(msgs) != 1 {
+		t.Fatalf("want 1 msg, got %d", len(msgs))
+	}
+	st := msgs[0].(streamStatusMsg)
+	if strings.HasPrefix(st.status, "shell: ") {
+		t.Fatalf("status should prefer actions over raw shell wrapper; got %q", st.status)
+	}
+	for _, want := range []string{"git status", "read main.go"} {
+		if !strings.Contains(st.status, want) {
+			t.Fatalf("status should include %q; got %q", want, st.status)
+		}
+	}
+}
+
 func TestCodexEventToMsgs_McpToolCallStatus(t *testing.T) {
 	proc := &providerProc{}
 	ev := parseCodexEvent(t, `{"method":"item/started","params":{"item":{"type":"mcpToolCall","id":"m","server":"gh","tool":"pr_read","arguments":{}}}}`)

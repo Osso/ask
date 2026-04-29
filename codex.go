@@ -787,6 +787,11 @@ func codexItemStatus(item map[string]any) string {
 	case "agentMessage":
 		return "responding…"
 	case "commandExecution":
+		if actions := codexCommandActions(item); len(actions) > 0 {
+			if summary := summarizeCommandActions(actions); summary != "" {
+				return truncate(summary, 60)
+			}
+		}
 		if cmd, _ := item["command"].(string); cmd != "" {
 			if summary := summarizeShellCommand(cmd); summary != "" {
 				return "shell: " + truncate(summary, 60)
