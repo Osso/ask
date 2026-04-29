@@ -121,9 +121,6 @@ func (a app) dispatchUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isCtrlKey(m, 'z') {
 			return a.suspendApp()
 		}
-		if isCtrlKey(m, 'd') {
-			return a.handleCtrlD()
-		}
 		if isCtrlKey(m, 'n') {
 			return a.openTab()
 		}
@@ -167,42 +164,6 @@ func (a app) dispatchUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// other broadcast candidates: let every tab filter by its own proc.
 		return a.broadcast(msg)
 	}
-}
-
-// handleCtrlD layers Ctrl+D: exit shell mode if active, else close the
-// current tab if there's more than one, else quit the app.
-func (a app) handleCtrlD() (tea.Model, tea.Cmd) {
-	active := a.activeTab()
-	if active.shellMode {
-		*a.tabs[a.active] = active.exitShellMode()
-		return a, nil
-	}
-	if len(a.tabs) > 1 {
-		return a.closeTab(active.id)
-	}
-	return a.quit()
-}
-
-func (a app) quit() (tea.Model, tea.Cmd) {
-	for _, t := range a.tabs {
-		t.drainPendingReplies()
-		t.killProc()
-		t.killShellProc()
-		if t.mcpBridge != nil {
-			t.mcpBridge.stop()
-		}
-	}
-	// Mirror closeTab's last-tab path: arm the inline "last session: …"
-	// hint off the active tab's VS id so Ctrl+D and other quit() callers
-	// reach the same exit screen as closing the final tab. Empty VS id
-	// skips the flag, leaving the altscreen exit silent as before.
-	if a.active >= 0 && a.active < len(a.tabs) {
-		if vid := a.tabs[a.active].virtualSessionID; vid != "" {
-			a.quitting = true
-			a.quittingVID = vid
-		}
-	}
-	return a, tea.Quit
 }
 
 func (a app) View() tea.View {
