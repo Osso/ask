@@ -1094,6 +1094,94 @@ the symlink resolution still runs before any path is used as a lock-map key.
 
 ---
 
+## 27. prepareProviderSessionAt resolves cwd symlinks
+
+**Purpose.** When ask is launched from a symlinked checkout root
+(`~/Projects → /elsewhere/Projects` from a Syncthing-style layout) the
+provider session args (`rootCwd`, `args.Cwd`) carry the symlink-form
+path. Claude/Codex call `getcwd(2)` and see the canonical form, and
+the bash-hook approval helper compares file paths against `args.Cwd`,
+so without this patch the two ends disagree and worktree-safe edits
+get demoted from SAFE to Unsure (surfacing the approval modal). Resolve
+via `filepath.EvalSymlinks` so ask, the provider, and the bash-hook
+all see the same canonical paths.
+
+**Behavior details worth preserving.**
+- `prepareProviderSessionAt` resolves `rootCwd` at the top via
+  `filepath.EvalSymlinks`; failure is non-fatal (falls through with the
+  literal value).
+- `args.Cwd` is resolved both when defaulted from `rootCwd` (no explicit
+  cwd was passed) and when set directly (`resumeVirtualSession` handing
+  a worktree path).
+- The resume-recreate branch (`ensureResumeWorktree`) sees the resolved
+  path so the worktree directory is recreated under its canonical name.
+- Pairs with #23 (bash-hook payload cwd resolution) and #21 (Claude
+  session-dir lookup): together those three patches ensure every
+  cwd-derived path crossing the ask ↔ provider ↔ hook boundary is in
+  canonical form.
+
+**Key files.**
+- `proc.go` (`prepareProviderSessionAt`)
+- `worktree_lifecycle_test.go` (`TestEnsureProc_ResumeCanonicalizesSymlinkedRoot`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'EnsureProc|ResumeVirtualSession'`
+- `go test ./...`
+
+**Rebase risk.** Low. If upstream restructures `prepareProviderSessionAt`
+or splits cwd derivation into a separate helper, ensure the
+`EvalSymlinks` calls still run before any consumer reads `args.Cwd`.
+
+---
+
+## 28. Shell-wrapper summary in short Bash render
+
+**Purpose.** Codex's own TUI renders shell-wrapper invocations like
+`/usr/bin/zsh -lc 'cat foo.go'` as terse one-liners ("read foo.go").
+ask mirrors that for short-mode Bash tool calls, the Bash approval modal
+header, and the Codex `commandExecution` status string so the history
+reads like a sequence of intent ("read X", "search Y in Z", "git log -6")
+rather than a wall of zsh wrappers.
+
+**Behavior details worth preserving.**
+- `summarizeShellCommand` recognizes wrapper prefixes (`/usr/bin/zsh -lc`,
+  `/bin/sh -c`, etc.) and unwraps the inner command before classifying.
+- `cat <files>` → `read <files>` (multiple files comma-separated).
+- `rg <pattern> <path>` / `fdfind …` → `search <pattern> in <path>`.
+- Other commands fall through to the raw command text.
+- `renderToolCallBlock` short-mode Bash collapses to a single
+  `▸ <summary>` line when `summarizeShellCommand` returns non-empty;
+  falls back to the previous header + key rows otherwise.
+- `renderToolCallActionsBlock` renders each compacted action as its own
+  `▸` line in short mode, matching the per-action explorer rows in the
+  Codex TUI.
+- `approvalSummary` uses the summary text so the Bash approval header
+  reads the same way as the chat row.
+- `codexItemStatus` prefixes `shell:` to the summary so live streaming
+  shows the unwrapped intent before the call lands.
+
+**Key files.**
+- `tool_output.go` (`summarizeShellCommand`, `renderToolCallBlock`,
+  `renderToolCallActionsBlock`)
+- `approval.go` (`approvalSummary` Bash branch)
+- `codex.go` (`codexItemStatus`)
+- `tool_output_test.go` (updated `TestRenderToolCallBlock_ShortFiltersToAllowlist`,
+  new `TestRenderToolCallBlock_ShortBashSummarizesWrapper`,
+  `TestSummarizeShellCommand_ReadAndSearch`)
+- `codex_stream_test.go` (updated `TestCodexEventToMsgs_ItemStartedStatusByType`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'SummarizeShellCommand|ShortBash|ShortFilters|StatusByType|ToolCallMsgShort'`
+- `go test ./...`
+
+**Rebase risk.** Medium. Cross-cuts four files and replaces an existing
+render path. If upstream restructures `renderToolCallBlock` to take a
+richer context object (mode + provider + tool defs), the Bash branch
+needs reapplying. The summarizer itself is pure text manipulation — safe
+to lift wholesale.
+
+---
+
 ## Full verification
 
 Before declaring a rebase complete:
