@@ -41,16 +41,19 @@ func TestRenderToolCallBlock_SortedKeys(t *testing.T) {
 }
 
 func TestRenderToolCallBlock_ShortFiltersToAllowlist(t *testing.T) {
-	// Bash in short mode shows only command, hides other inputs the user
-	// asked the renderer to elide.
+	// Bash in short mode collapses to a one-line summary and hides other
+	// inputs the user asked the renderer to elide.
 	input := map[string]any{
-		"command":           "ls /tmp",
+		"command":           "/usr/bin/zsh -lc 'cat /tmp/log.txt'",
 		"description":       "list tmp",
 		"run_in_background": true,
 	}
 	out := renderToolCallBlock("Bash", input, toolOutputShort)
-	if !strings.Contains(out, "command") || !strings.Contains(out, "ls /tmp") {
-		t.Errorf("short Bash should keep command; got %q", out)
+	if !strings.Contains(out, "read /tmp/log.txt") {
+		t.Errorf("short Bash should summarize command; got %q", out)
+	}
+	if strings.Contains(out, "command:") {
+		t.Errorf("short Bash should not render raw command row; got %q", out)
 	}
 	if strings.Contains(out, "description") || strings.Contains(out, "run_in_background") {
 		t.Errorf("short Bash should drop non-allowlisted inputs; got %q", out)
@@ -66,6 +69,38 @@ func TestRenderToolCallBlock_ShortUnknownToolHeaderOnly(t *testing.T) {
 	}
 	if strings.Contains(out, "foo") || strings.Contains(out, "baz") {
 		t.Errorf("short mode should drop unknown-tool inputs; got %q", out)
+	}
+}
+
+func TestRenderToolCallBlock_ShortBashSummarizesWrapper(t *testing.T) {
+	out := renderToolCallBlock("Bash", map[string]any{
+		"command": "/usr/bin/zsh -lc 'git log --oneline -6'",
+	}, toolOutputShort)
+	if strings.Contains(out, "/usr/bin/zsh") {
+		t.Fatalf("wrapper should be hidden; got %q", out)
+	}
+	if !strings.Contains(out, "git log --oneline -6") {
+		t.Fatalf("expected summarized git command; got %q", out)
+	}
+	if strings.Contains(out, "command:") {
+		t.Fatalf("short Bash should collapse to one line; got %q", out)
+	}
+}
+
+func TestSummarizeShellCommand_ReadAndSearch(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"cat main.go", "read main.go"},
+		{"/usr/bin/zsh -lc 'cat src/a.go src/b.go'", "read src/a.go, src/b.go"},
+		{"rg TODO src/", "search TODO in src/"},
+		{"/usr/bin/zsh -lc 'rg --type=go TODO src/'", "search TODO in src/"},
+	}
+	for _, tc := range cases {
+		if got := summarizeShellCommand(tc.in); !strings.Contains(got, tc.want) {
+			t.Errorf("%q => %q want %q", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -130,8 +165,7 @@ func TestRenderToolCallActions_SingleReadShowsName(t *testing.T) {
 
 func TestRenderToolCallActions_GroupsConsecutiveReads(t *testing.T) {
 	// Multiple reads in one call collapse to a single comma-separated row,
-	// matching Codex's exec_cell rendering. Header reverts to "shell"
-	// because the rendered row count is 1 but the body is a join.
+	// matching Codex's exec_cell rendering.
 	actions := []map[string]any{
 		{"type": "read", "name": "a.go"},
 		{"type": "read", "name": "b.go"},
@@ -146,23 +180,39 @@ func TestRenderToolCallActions_GroupsConsecutiveReads(t *testing.T) {
 	}
 }
 
-func TestRenderToolCallActions_MixedActionsListsRows(t *testing.T) {
-	// Mixed actions get the generic shell header and one indented row per
-	// action. Search renders "<query> in <path>"; unknown uses the program
-	// token as title.
+func TestRenderToolCallActions_ShortModeFlattensRows(t *testing.T) {
+	// Short mode should flatten mixed actions into separate one-liners so
+	// shell wrappers stay out of the way.
 	actions := []map[string]any{
 		{"type": "read", "name": "main.go"},
 		{"type": "search", "query": "TODO", "path": "src/", "command": "rg TODO src/"},
 		{"type": "unknown", "command": "git status"},
 	}
 	out := renderToolCallActionsBlock("shell", actions, toolOutputShort)
-	if !strings.Contains(out, "▸") || !strings.Contains(out, "shell") {
-		t.Errorf("expected shell header for mixed actions; got %q", out)
+	if strings.Contains(out, "shell") {
+		t.Errorf("short mode should not show shell header; got %q", out)
 	}
 	for _, want := range []string{"read main.go", "search TODO in src/", "git status"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in mixed render: %q", want, out)
 		}
+	}
+	if got := strings.Count(out, "▸ "); got != 3 {
+		t.Errorf("short mode should emit three top-level rows; got %d in %q", got, out)
+	}
+}
+
+func TestRenderToolCallActions_FullModeKeepsShellHeader(t *testing.T) {
+	actions := []map[string]any{
+		{"type": "read", "name": "main.go"},
+		{"type": "unknown", "command": "git status"},
+	}
+	out := renderToolCallActionsBlock("shell", actions, toolOutputFull)
+	if !strings.Contains(out, "shell") {
+		t.Errorf("full mode should keep shell header; got %q", out)
+	}
+	if strings.Count(out, "▸ ") != 1 {
+		t.Errorf("full mode should keep one shell header line; got %q", out)
 	}
 }
 
@@ -240,9 +290,9 @@ func TestRenderToolCallActions_ListFilesUsesPathOrCommand(t *testing.T) {
 
 func TestSplitProgramAndArgs(t *testing.T) {
 	cases := []struct {
-		in            string
-		wantProg      string
-		wantRest      string
+		in       string
+		wantProg string
+		wantRest string
 	}{
 		{"git log -6", "git", "log -6"},
 		{"git", "git", ""},

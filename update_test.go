@@ -472,8 +472,9 @@ func TestUpdate_ToolCallMsgDroppedWhenQuiet(t *testing.T) {
 }
 
 func TestUpdate_ToolCallMsgShortFiltersInputs(t *testing.T) {
-	// Short mode keeps the call but only the highest-signal input fields
-	// per the shortToolFields allowlist.
+	// Short Bash collapses to a single ▸ <summary> line via
+	// summarizeShellCommand. `ls` renders as `list` (intent verb), and
+	// the description / non-allowlisted fields drop off entirely.
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}
 	m.toolOutputMode = toolOutputShort
@@ -489,8 +490,8 @@ func TestUpdate_ToolCallMsgShortFiltersInputs(t *testing.T) {
 	if len(m2.history) != 1 {
 		t.Fatalf("want 1 history entry, got %d", len(m2.history))
 	}
-	if !strings.Contains(m2.history[0].text, "ls") {
-		t.Errorf("short Bash should keep command; got %q", m2.history[0].text)
+	if !strings.Contains(m2.history[0].text, "list") {
+		t.Errorf("short Bash should summarize command; got %q", m2.history[0].text)
 	}
 	if strings.Contains(m2.history[0].text, "description") {
 		t.Errorf("short Bash should drop description; got %q", m2.history[0].text)

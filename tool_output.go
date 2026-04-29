@@ -145,6 +145,13 @@ func (m model) shouldRenderToolResult(msg toolResultMsg) bool {
 // highest-signal keys per known tool show up.
 func renderToolCallBlock(name string, input map[string]any, mode toolOutputMode) string {
 	if mode == toolOutputShort {
+		if name == "Bash" {
+			if cmd, _ := input["command"].(string); cmd != "" {
+				if summary := summarizeShellCommand(cmd); summary != "" {
+					return outputStyle.Render(diffPathStyle.Render("▸ " + summary))
+				}
+			}
+		}
 		input = filterShortInputs(name, input)
 	}
 	header := diffPathStyle.Render("▸ " + nonEmpty(name, "tool"))
@@ -156,24 +163,33 @@ func renderToolCallBlock(name string, input map[string]any, mode toolOutputMode)
 }
 
 // renderToolCallActionsBlock formats a Codex commandExecution call using
-// its parsed commandActions instead of dumping the raw shell wrapper. A
-// single action becomes the header itself ("▸ git log -6", "▸ read main.go"),
-// so a one-shot `git status` reads cleanly. Multiple actions get the generic
-// "▸ shell" header with each action indented below. Consecutive read actions
-// fold into a single comma-separated row ("read foo.go, bar.go") matching
-// Codex's own grouping in tui/src/exec_cell/render.rs.
-func renderToolCallActionsBlock(name string, actions []map[string]any, _ toolOutputMode) string {
+// its parsed commandActions instead of dumping the raw shell wrapper.
+//
+// In short mode, each compacted action renders as its own top-level one-liner
+// ("▸ read foo.go", "▸ search TODO in src/", "▸ git log -6"), matching the
+// Codex explorer view. Full mode keeps a shell header for multi-action calls
+// so the detail rows stay visually grouped.
+func renderToolCallActionsBlock(name string, actions []map[string]any, mode toolOutputMode) string {
 	rendered := compactCommandActions(actions)
 	if len(rendered) == 0 {
 		return ""
 	}
-	if len(rendered) == 1 {
-		a := rendered[0]
+	renderLine := func(a renderedCommandAction) string {
 		text := a.title
 		if a.body != "" {
 			text += " " + a.body
 		}
 		return outputStyle.Render(diffPathStyle.Render("▸ " + text))
+	}
+	if len(rendered) == 1 {
+		return renderLine(rendered[0])
+	}
+	if mode == toolOutputShort {
+		lines := make([]string, 0, len(rendered))
+		for _, a := range rendered {
+			lines = append(lines, renderLine(a))
+		}
+		return strings.Join(lines, "\n")
 	}
 	header := diffPathStyle.Render("▸ " + nonEmpty(name, "tool"))
 	lines := []string{outputStyle.Render(header)}
@@ -270,6 +286,153 @@ func renderSingleCommandAction(a map[string]any) renderedCommandAction {
 		return renderedCommandAction{title: prog, body: rest}
 	}
 	return renderedCommandAction{title: nonEmpty(t, "run"), body: command}
+}
+
+// summarizeShellCommand compresses a raw Bash command into the same kind
+// of display row Codex uses for commandAction items. Shell wrappers are
+// unwrapped first so `/usr/bin/zsh -lc 'git status'` renders as `git status`
+// and common file/search commands become `read ...` / `search ...`.
+func summarizeShellCommand(command string) string {
+	if command == "" {
+		return ""
+	}
+	script := unwrapShellWrapper(command)
+	segments := splitShellSegments(script)
+	for _, segment := range segments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		tokens := splitShellTokens(segment)
+		if len(tokens) == 0 {
+			continue
+		}
+		switch tokens[0] {
+		case "cd", "export", "source", "pwd", "true", "false":
+			continue
+		}
+		row := summarizeCommandTokens(tokens)
+		if row.title != "" {
+			text := row.title
+			if row.body != "" {
+				text += " " + row.body
+			}
+			return text
+		}
+	}
+	tokens := splitShellTokens(script)
+	if len(tokens) == 0 {
+		return truncate(script, 80)
+	}
+	row := summarizeCommandTokens(tokens)
+	if row.title == "" {
+		return truncate(script, 80)
+	}
+	text := row.title
+	if row.body != "" {
+		text += " " + row.body
+	}
+	return text
+}
+
+// summarizeCommandTokens maps a tokenized command to a compact display
+// label. This intentionally tracks the same broad categories Codex uses
+// for commandActions so the history row reads like the explorer view.
+func summarizeCommandTokens(tokens []string) renderedCommandAction {
+	prog := tokens[0]
+	rest := strings.Join(tokens[1:], " ")
+	switch prog {
+	case "cat", "head", "tail", "less", "more":
+		return renderedCommandAction{title: "read", body: strings.Join(splitPositionalArgs(tokens[1:]), ", ")}
+	case "grep", "rg", "ag", "ack":
+		query, path := parseSearchArgs(rest)
+		return renderedCommandAction{title: "search", body: searchBody(query, path, rest)}
+	case "ls", "fd", "fdfind":
+		return renderedCommandAction{title: "list", body: joinPositionalTokens(tokens[1:])}
+	}
+	if rest == "" {
+		return renderedCommandAction{title: prog}
+	}
+	return renderedCommandAction{title: prog, body: rest}
+}
+
+// unwrapShellWrapper strips the common `shell -lc 'script'` form so the
+// summarizer can inspect the actual script instead of the shell launcher.
+func unwrapShellWrapper(command string) string {
+	tokens := splitShellTokens(strings.TrimSpace(command))
+	if len(tokens) < 3 {
+		return command
+	}
+	switch tokens[1] {
+	case "-c", "-lc":
+		switch base := tokens[0]; {
+		case strings.HasSuffix(base, "bash"),
+			strings.HasSuffix(base, "zsh"),
+			strings.HasSuffix(base, "sh"),
+			strings.HasSuffix(base, "fish"):
+			return strings.Join(tokens[2:], " ")
+		}
+	}
+	return command
+}
+
+// splitShellSegments breaks a shell-ish command into connector-delimited
+// segments. It is intentionally small: enough to skip leading `cd` / env
+// setup and pick the first meaningful command without trying to fully parse
+// shell syntax.
+func splitShellSegments(command string) []string {
+	if command == "" {
+		return nil
+	}
+	var segments []string
+	var cur strings.Builder
+	var quote byte
+	flush := func() {
+		if cur.Len() == 0 {
+			return
+		}
+		segments = append(segments, cur.String())
+		cur.Reset()
+	}
+	for i := 0; i < len(command); i++ {
+		c := command[i]
+		switch {
+		case quote == 0 && c == '&' && i+1 < len(command) && command[i+1] == '&':
+			flush()
+			i++
+		case quote == 0 && (c == ';' || c == '\n'):
+			flush()
+		case quote == 0 && (c == '"' || c == '\''):
+			quote = c
+			cur.WriteByte(c)
+		case quote != 0 && c == quote:
+			quote = 0
+			cur.WriteByte(c)
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return segments
+}
+
+// joinPositionalTokens keeps only the non-flag tokens and joins them back
+// into a compact body string.
+func joinPositionalTokens(tokens []string) string {
+	return strings.Join(splitPositionalArgs(tokens), " ")
+}
+
+// splitPositionalArgs filters out flag-like tokens and returns the
+// remaining positional arguments in order.
+func splitPositionalArgs(tokens []string) []string {
+	var positional []string
+	for _, tok := range tokens {
+		if strings.HasPrefix(tok, "-") {
+			continue
+		}
+		positional = append(positional, tok)
+	}
+	return positional
 }
 
 // searchPrograms is the set of CLIs we treat as text/file-search tools

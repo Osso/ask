@@ -73,7 +73,7 @@ func TestCodexEventToMsgs_ItemStartedStatusByType(t *testing.T) {
 func TestCodexEventToMsgs_CommandExecutionStatusTruncated(t *testing.T) {
 	proc := &providerProc{}
 	long := strings.Repeat("x", 200)
-	raw := `{"method":"item/started","params":{"item":{"type":"commandExecution","id":"c","command":"` + long + `"}}}`
+	raw := `{"method":"item/started","params":{"item":{"type":"commandExecution","id":"c","command":"/usr/bin/zsh -lc 'git status && ` + long + `'"}}}`
 	ev := parseCodexEvent(t, raw)
 	msgs := codexEventToMsgs(ev, proc)
 	if len(msgs) != 1 {
@@ -82,6 +82,9 @@ func TestCodexEventToMsgs_CommandExecutionStatusTruncated(t *testing.T) {
 	st := msgs[0].(streamStatusMsg)
 	if !strings.HasPrefix(st.status, "shell: ") {
 		t.Errorf("status should start with 'shell: ', got %q", st.status)
+	}
+	if !strings.Contains(st.status, "git status") {
+		t.Errorf("status should summarize the shell command; got %q", st.status)
 	}
 	// truncate(..., 60) clips to 60 runes including the ellipsis; the prefix
 	// 'shell: ' adds 7 bytes. Just guard against unbounded growth.

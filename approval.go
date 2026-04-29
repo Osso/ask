@@ -7,7 +7,6 @@ import (
 	lipgloss "charm.land/lipgloss/v2"
 )
 
-
 const (
 	approvalBoxWidth       = 90
 	approvalChoiceDeny     = 0
@@ -234,6 +233,9 @@ func approvalSummary(tool string, input map[string]any, width int) string {
 		}
 	case "Bash":
 		if c, _ := input["command"].(string); c != "" {
+			if summary := summarizeShellCommand(c); summary != "" {
+				return approvalSummaryStyle.Render(truncate(summary, width))
+			}
 			return approvalSummaryStyle.Render(firstLinesClamped(c, width, approvalSummaryMaxLns))
 		}
 	case "Glob", "Grep":

@@ -788,6 +788,9 @@ func codexItemStatus(item map[string]any) string {
 		return "responding…"
 	case "commandExecution":
 		if cmd, _ := item["command"].(string); cmd != "" {
+			if summary := summarizeShellCommand(cmd); summary != "" {
+				return "shell: " + truncate(summary, 60)
+			}
 			return "shell: " + truncate(cmd, 60)
 		}
 		return "shell"
