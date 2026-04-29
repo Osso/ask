@@ -570,7 +570,7 @@ func applyTheme(t theme) {
 	diffDelStyle = lipgloss.NewStyle().Foreground(t.errorFG)
 	diffContextStyle = lipgloss.NewStyle().Foreground(t.dim)
 	toolInputStyle = lipgloss.NewStyle().Foreground(t.muted)
-	toolResultStyle = lipgloss.NewStyle().Foreground(t.muted)
+	toolResultStyle = lipgloss.NewStyle()
 
 	askBoxStyle = lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
