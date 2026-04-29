@@ -246,6 +246,14 @@ func validateExecutorCwd(args ProviderSessionArgs, rootCwd string) error {
 // those workspaces.
 func pruneWorktrees() {
 	cwd := getwdOrEmpty()
+	// Resolve symlinks so the locks map (keyed by git's canonical paths)
+	// agrees with the iteration paths we build from cwd. Without this,
+	// launching ask from a symlinked checkout root (e.g. ~/Projects →
+	// /elsewhere/Projects) makes every locks[path] lookup miss, so prune
+	// tries to git-worktree-remove still-locked siblings and silently fails.
+	if real, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = real
+	}
 	backend := worktreeBackendAt(cwd)
 	if backend == workspaceBackendNone {
 		return

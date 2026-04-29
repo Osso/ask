@@ -457,6 +457,36 @@ func TestPruneWorktrees_RemovesOurOwnLocked(t *testing.T) {
 	}
 }
 
+func TestPruneWorktrees_RemovesWhenCwdIsSymlinked(t *testing.T) {
+	if !gitAvailable() {
+		t.Skip("git not installed")
+	}
+	realDir := initGitRepo(t)
+	linkDir := filepath.Join(filepath.Dir(realDir), "link-to-repo")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skip("symlink not supported:", err)
+	}
+	// t.Chdir on Unix sets $PWD too, so os.Getwd() returns the symlink path
+	// — same shape as a user `cd`-ing through a symlink before launching ask.
+	t.Chdir(linkDir)
+	cwd, _ := os.Getwd()
+	if cwd != linkDir {
+		t.Skipf("os.Getwd did not preserve symlink path; got %q want %q", cwd, linkDir)
+	}
+	path, name, err := createWorktree()
+	if err != nil {
+		t.Fatalf("createWorktree: %v", err)
+	}
+	pruneWorktrees()
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("worktree still exists after prune: err=%v", err)
+	}
+	out := runGit(t, realDir, "branch", "--list", "worktree-"+name)
+	if strings.Contains(out, "worktree-"+name) {
+		t.Errorf("branch worktree-%s should be deleted, got:\n%s", name, out)
+	}
+}
+
 func TestPruneWorktrees_JJRemovesCleanWorkspace(t *testing.T) {
 	dir := initJJRepo(t)
 	t.Chdir(dir)

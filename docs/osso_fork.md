@@ -1059,6 +1059,41 @@ update will silently allow regressions.
 
 ---
 
+## 26. pruneWorktrees resolves cwd symlinks
+
+**Purpose.** Make worktree pruning actually clean up locked siblings when ask is
+launched from a symlinked path (e.g. `~/Projects → /elsewhere/Projects` from a
+Syncthing-style layout). Earlier, the lock-lookup map was keyed by git's
+canonical (resolved-symlink) paths while the iteration paths were built from
+the symlink-form `cwd`, so every lookup missed and `git worktree remove`
+silently failed against still-locked trees, leaving stale-locked worktrees
+piling up forever.
+
+**Behavior details worth preserving.**
+- `pruneWorktrees` calls `filepath.EvalSymlinks(cwd)` before any subsequent
+  path manipulation. Failure falls through unchanged so non-symlinked cases
+  stay byte-identical.
+- Resolution happens before the worktree-name self-check, so being inside a
+  symlinked worktree is detected correctly.
+- Other call sites in `worktree.go` are unaffected — they shell out to git/jj
+  which resolve symlinks internally; the lock-lookup map was the only
+  read-side path comparison that needed canonicalisation.
+
+**Key files.**
+- `worktree.go` (`pruneWorktrees`)
+- `worktree_test.go` (`TestPruneWorktrees_RemovesWhenCwdIsSymlinked`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'PruneWorktrees'`
+- `go test ./...`
+
+**Rebase risk.** Low. Pure addition at the top of `pruneWorktrees`. If upstream
+restructures the prune flow (e.g. consolidates cwd derivation into a separate
+helper, or moves the prune call into a different lifecycle hook), make sure
+the symlink resolution still runs before any path is used as a lock-map key.
+
+---
+
 ## Full verification
 
 Before declaring a rebase complete:
