@@ -208,6 +208,40 @@ func TestEnsureProc_ResumeRecreatesMissingWorktree(t *testing.T) {
 	}
 }
 
+// TestEnsureProc_ResumeCanonicalizesSymlinkedRoot covers the resume
+// path when ask is launched from a symlinked repo root. The provider
+// must receive the resolved worktree path so Claude and the bash-hook
+// both see the same canonical cwd and worktree-safe edits stay
+// auto-approved.
+func TestEnsureProc_ResumeCanonicalizesSymlinkedRoot(t *testing.T) {
+	realDir := initGitRepo(t)
+	parent := filepath.Dir(realDir)
+	linkDir := filepath.Join(parent, filepath.Base(realDir)+"-link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatalf("symlink repo root: %v", err)
+	}
+	t.Chdir(linkDir)
+	isolateHome(t)
+	p := newFakeProvider()
+	p.caps = ProviderCapabilities{Resume: true}
+	withRegisteredProviders(t, p)
+	m := newTestModel(t, p)
+	m.sessionID = "sess"
+	wt := "sparkly-swooping-glacier"
+	wtPath, _, err := createWorktreeAtName(realDir, wt)
+	if err != nil {
+		t.Fatalf("seed worktree: %v", err)
+	}
+	m.resumeCwd = filepath.Join(linkDir, ".claude", "worktrees", wt)
+
+	if err := m.ensureProc(); err != nil {
+		t.Fatalf("ensureProc: %v", err)
+	}
+	if p.startArgs[0].Cwd != wtPath {
+		t.Errorf("StartSession Cwd=%q want canonical %q", p.startArgs[0].Cwd, wtPath)
+	}
+}
+
 // TestResumeVirtualSession_KeepsWorktreeCwd is the end-to-end
 // regression for the `ask resume <vsid>` permission-prompt issue:
 // a VS whose ProviderSessionRef.Cwd points at a worktree must, after

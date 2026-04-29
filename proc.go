@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -88,8 +89,13 @@ func prepareProviderSessionAt(args ProviderSessionArgs, worktreeName, rootCwd st
 		}
 		rootCwd = cwd
 	}
+	if resolved, err := filepath.EvalSymlinks(rootCwd); err == nil {
+		rootCwd = resolved
+	}
 	if args.Cwd == "" {
 		args.Cwd = rootCwd
+	} else if resolved, err := filepath.EvalSymlinks(args.Cwd); err == nil {
+		args.Cwd = resolved
 	}
 	// Resume paths derive the worktree name from where the prior
 	// session lived. Do this first so the step below can treat a
@@ -116,6 +122,9 @@ func prepareProviderSessionAt(args ProviderSessionArgs, worktreeName, rootCwd st
 	// session lands in the same isolated workspace it was created in.
 	if worktreeName != "" {
 		args.Cwd = worktreePath(rootCwd, worktreeName)
+		if resolved, err := filepath.EvalSymlinks(args.Cwd); err == nil {
+			args.Cwd = resolved
+		}
 		if err := ensureResumeWorktree(args.Cwd); err != nil {
 			return args, worktreeName, err
 		}
