@@ -121,6 +121,9 @@ func (a app) dispatchUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isCtrlKey(m, 'z') {
 			return a.suspendApp()
 		}
+		if isCtrlKey(m, 'd') {
+			return a.handleCtrlD()
+		}
 		if isCtrlKey(m, 'n') {
 			return a.openTab()
 		}
@@ -251,6 +254,17 @@ func (a app) broadcast(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 	return a, tea.Batch(cmds...)
+}
+
+// handleCtrlD layers Ctrl+D: exit shell mode if active, else close the
+// current tab. closeTab handles the final-tab quit path already.
+func (a app) handleCtrlD() (tea.Model, tea.Cmd) {
+	active := a.activeTab()
+	if active.shellMode {
+		*a.tabs[a.active] = active.exitShellMode()
+		return a, nil
+	}
+	return a.closeTab(active.id)
 }
 
 // broadcastResize tells every tab the current body dimensions so their

@@ -287,6 +287,7 @@ render as raw text in history. Drop to a separate shell for those.
 | `Ctrl+V`               | Paste image from clipboard                         |
 | `Ctrl+C` / `Esc`       | While a turn is running, open a `Stop this turn?` confirm box; on confirm it kills the claude subprocess and a new one spawns on the next send. `Esc` also clears pending attachments when idle. |
 | `Ctrl+C` (twice, idle) | Close the current tab. First press shows a `Press ctrl+c again to exit` hint; a second `Ctrl+C` closes the tab (or quits if it was the last). Any other key disarms the hint. |
+| `Ctrl+D`               | Layered exit: leave shell mode, then close the current tab, and only quit `ask` on the last tab |
 | `Ctrl+N`               | Open a new tab (inherits the active tab's cwd)     |
 | `Ctrl+←` / `Ctrl+→`    | Cycle to the previous / next tab (wraps)           |
 | `PgUp` / `PgDn`        | Scroll the viewport half a page                    |
