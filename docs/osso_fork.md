@@ -12,6 +12,7 @@ and patches that have intentionally been removed from the stack.
 Current patch stack:
 
 ```text
+95bb36a update: add conversation rewind
 734f5d5 main: add CLI option validation, reject unknown flags/subcommands
 bd2ca81 Add --simulate-approval flag to exercise the approval modal at startup
 ae42218 selection: copy to clipboard on mouse release
@@ -1255,7 +1256,8 @@ session instead of only changing the visible transcript.
 **Rebase risk.** Medium. The feature depends on the virtual-session
 materialization path staying provider-neutral. If upstream adds first-class
 message rewind, prefer preserving the provider-session fork semantics over
-keeping this exact picker implementation.
+keeping this exact picker implementation. Upstream issue is filed
+(`Cidan/ask#12`); drop this patch if upstream merges an equivalent feature.
 
 ---
 
