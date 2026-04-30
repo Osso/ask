@@ -1213,6 +1213,52 @@ same composer path as typed keys.
 
 ---
 
+## 30. Rewind conversation history
+
+**Purpose.** Mirror Claude Code's "rewind" workflow for ask: pick a prior
+user prompt, truncate the conversation to the point before it, restore that
+prompt into the composer, and continue from a freshly materialized provider
+session instead of only changing the visible transcript.
+
+**Behavior details worth preserving.**
+- `/rewind` is an app-level slash command available for every provider.
+  Pressing Esc on an empty composer also enters rewind when there is at least
+  one user prompt to restore; otherwise Esc keeps the close-tab confirmation
+  behavior.
+- The picker lists user prompts and defaults to the most recent one. Enter
+  removes that prompt and all later entries from `m.history`, restores the
+  selected prompt into `m.input`, kills the old provider process, and clears
+  the old native session id.
+- If retained history contains user/assistant turns, ask calls the provider's
+  `Materialize` path via `translateVSCmd` and stores the returned native
+  session id before the next send. Rewinding to the first prompt has no
+  retained turns, so it starts from a clean provider session.
+- While materialization is in flight, the restored prompt remains in the
+  composer but Enter is ignored so the user cannot accidentally send before
+  the forked native session id is ready.
+
+**Key files.**
+- `provider.go` (`/rewind` app slash command)
+- `types.go` (`modeRollback`, `rollbackIdx`)
+- `update.go` (`startRollbackPicker`, `updateRollback`, `applyRollback`)
+- `proc.go` (`sendToProvider` materialization guard)
+- `view.go` (`viewRollback`)
+- `update_test.go` (`TestHandleCommand_RewindOpensRollbackPicker`,
+  `TestRollbackEnterRestoresPromptAndMaterializesRetainedTurns`,
+  `TestRollbackMaterializingBlocksSubmitWithoutAppendingUser`,
+  `TestRollbackToFirstPromptStartsFreshSession`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'Rewind|Rollback'`
+- `go test ./...`
+
+**Rebase risk.** Medium. The feature depends on the virtual-session
+materialization path staying provider-neutral. If upstream adds first-class
+message rewind, prefer preserving the provider-session fork semantics over
+keeping this exact picker implementation.
+
+---
+
 ## Full verification
 
 Before declaring a rebase complete:

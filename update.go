@@ -464,6 +464,7 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		}
 		m.busy = false
 		m.status = ""
+		m.rollbackMaterializing = false
 		if msg.err != nil {
 			m.appendHistory(outputStyle.Render(errStyle.Render(
 				"translate: " + msg.err.Error())))
@@ -707,6 +708,8 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			return m.updateConfigModal(msg)
 		case modeProviderSwitch:
 			return m.updateProviderSwitch(msg)
+		case modeRollback:
+			return m.updateRollback(msg)
 		default:
 			return m.updateInput(msg)
 		}
@@ -791,6 +794,9 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if len(m.pending) > 0 {
 			m.pending = nil
 			return m, nil
+		}
+		if m.input.Value() == "" && m.canRollback() {
+			return m.startRollbackPicker(), nil
 		}
 		if m.input.Value() == "" {
 			m.closeTabConfirming = true
@@ -888,6 +894,9 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 			}
 			if line == "" && len(m.pending) == 0 {
+				return m, nil
+			}
+			if m.rollbackMaterializing {
 				return m, nil
 			}
 			if m.busy && (strings.HasPrefix(line, "/") || m.pathPickerCmd() != "" || bareCommand(line) != "") {
@@ -1178,6 +1187,111 @@ func (m model) updatePicker(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m model) canRollback() bool {
+	return len(m.rollbackUserHistoryIndexes()) > 0
+}
+
+func (m model) rollbackUserHistoryIndexes() []int {
+	indexes := make([]int, 0, len(m.history))
+	for i, e := range m.history {
+		if e.kind == histUser {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
+}
+
+func (m model) startRollbackPicker() model {
+	m.mode = modeRollback
+	m.rollbackIdx = len(m.rollbackUserHistoryIndexes()) - 1
+	if m.rollbackIdx < 0 {
+		m.rollbackIdx = 0
+	}
+	return m
+}
+
+func (m model) updateRollback(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if msg.Mod == tea.ModCtrl && msg.Code == 'd' {
+		return m, closeTabCmd(m.id)
+	}
+	if msg.Mod == tea.ModCtrl && msg.Code == 'c' {
+		m.mode = modeInput
+		return m, nil
+	}
+	indexes := m.rollbackUserHistoryIndexes()
+	if len(indexes) == 0 {
+		m.mode = modeInput
+		return m, nil
+	}
+	switch msg.Code {
+	case tea.KeyEsc:
+		m.mode = modeInput
+		return m, nil
+	case tea.KeyUp:
+		if m.rollbackIdx > 0 {
+			m.rollbackIdx--
+		}
+	case tea.KeyDown:
+		if m.rollbackIdx < len(indexes)-1 {
+			m.rollbackIdx++
+		}
+	case tea.KeyEnter:
+		if m.rollbackIdx < 0 || m.rollbackIdx >= len(indexes) {
+			return m, nil
+		}
+		return m.applyRollback(indexes[m.rollbackIdx])
+	}
+	return m, nil
+}
+
+func (m model) applyRollback(historyIdx int) (tea.Model, tea.Cmd) {
+	if historyIdx < 0 || historyIdx >= len(m.history) || m.history[historyIdx].kind != histUser {
+		return m, nil
+	}
+	prompt := m.history[historyIdx].text
+	retained := append([]historyEntry(nil), m.history[:historyIdx]...)
+	turns := neutralTurnsFromHistory(retained)
+
+	m.killProc()
+	m.mode = modeInput
+	m.history = retained
+	m.input.SetValue(prompt)
+	m.resetHistoryNav()
+	m.refreshPathMatches()
+	m.sessionID = ""
+	m.resumeCwd = ""
+	m.worktreeName = ""
+	m.rollbackMaterializing = false
+	(&m).clearSelection()
+
+	if len(turns) == 0 {
+		m.virtualSessionID = ""
+		m.busy = false
+		m.status = ""
+		return m, nil
+	}
+
+	vsID := newVirtualSessionID()
+	m.virtualSessionID = vsID
+	m.busy = true
+	m.status = "rewinding…"
+	m.rollbackMaterializing = true
+	req := translateVSReq{
+		tabID:       m.id,
+		target:      m.provider,
+		vsID:        vsID,
+		workspace:   m.cwd,
+		nativeCwd:   m.cwd,
+		directTurns: turns,
+		opts: HistoryOpts{
+			RenderDiffs: m.renderDiffs,
+			ToolOutput:  m.toolOutputMode,
+			QuietMode:   m.quietMode,
+		},
+	}
+	return m, tea.Batch(translateVSCmd(req), m.spinner.Tick)
+}
+
 // resumeVirtualSession wires the picker's selection into the tab.
 // Every entry is a VirtualSession id; the current tab's provider
 // decides which native session to load:
@@ -1296,7 +1410,7 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 	cmd, _, _ := strings.Cut(line, " ")
 	if invalid := validateAskCwd(m.cwd); invalid.Msg != "" {
 		switch cmd {
-		case "/resume", "/new", "/clear", "/model", "/effort", "/config":
+		case "/resume", "/new", "/clear", "/model", "/effort", "/config", "/rewind":
 			// Pure UI commands are still safe to run when ask's cwd
 			// is invalid — they don't fork a provider. Blocking them
 			// would also strand the user without a way to fix things
@@ -1351,6 +1465,16 @@ func (m model) handleCommand(line string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.openProviderSwitch(), nil
+	case "/rewind":
+		if m.busy {
+			return m, nil
+		}
+		if !m.canRollback() {
+			m.appendHistory(outputStyle.Render(dimStyle.Render("nothing to rewind yet")))
+			return m, nil
+		}
+		m = m.startRollbackPicker()
+		return m, nil
 	case "/config":
 		m = m.startConfigModal()
 		return m, nil

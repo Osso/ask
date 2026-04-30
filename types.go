@@ -38,6 +38,7 @@ const (
 	modeApproval
 	modeConfig
 	modeProviderSwitch
+	modeRollback
 )
 
 type streamStatusMsg struct {
@@ -412,6 +413,9 @@ type model struct {
 	// alone.
 	providerSwitchLevel   int
 	providerSwitchProvIdx int
+
+	rollbackIdx           int
+	rollbackMaterializing bool
 
 	themeName string
 

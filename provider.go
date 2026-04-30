@@ -286,4 +286,5 @@ func (p *providerProc) kill() {
 var appBuiltinSlashCmds = []slashCmd{
 	{"/config", "configure ask"},
 	{"/provider", "switch provider for this tab"},
+	{"/rewind", "restore a previous prompt and fork the conversation"},
 }

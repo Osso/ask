@@ -973,6 +973,9 @@ func (m model) viewBody() string {
 	if m.mode == modeSessionPicker {
 		return m.viewPicker()
 	}
+	if m.mode == modeRollback {
+		return m.viewRollback()
+	}
 	var b strings.Builder
 	vs := time.Now()
 	b.WriteString(m.viewportWithScrollbar())
@@ -1533,4 +1536,42 @@ func (m model) viewPicker() string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func (m model) viewRollback() string {
+	indexes := m.rollbackUserHistoryIndexes()
+	var b strings.Builder
+	b.WriteString(promptStyle.Render("rewind"))
+	b.WriteString(dimStyle.Render("  (↑/↓ navigate · enter restore · esc cancel)"))
+	b.WriteString("\n\n")
+	if len(indexes) == 0 {
+		b.WriteString(dimStyle.Render("nothing to rewind yet"))
+		return b.String()
+	}
+	for i, historyIdx := range indexes {
+		prompt := firstLine(m.history[historyIdx].text)
+		runes := []rune(prompt)
+		maxLen := m.width - 12
+		if maxLen < 20 {
+			maxLen = 20
+		}
+		if len(runes) > maxLen {
+			prompt = string(runes[:maxLen-1]) + "…"
+		}
+		row := "  " + prompt
+		if i == m.rollbackIdx {
+			row = selectedStyle.Render("▸ " + prompt)
+		}
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func firstLine(s string) string {
+	line, _, _ := strings.Cut(s, "\n")
+	if strings.TrimSpace(line) == "" {
+		return "(empty prompt)"
+	}
+	return line
 }

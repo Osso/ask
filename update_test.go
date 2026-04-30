@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -1214,6 +1215,157 @@ func TestFilterSlashCmds_DeDupBuiltinsAndProvider(t *testing.T) {
 	}
 	if count != 1 {
 		t.Errorf("expected /new once, got %d (%+v)", count, got)
+	}
+}
+
+func TestHandleCommand_RewindOpensRollbackPicker(t *testing.T) {
+	m := newTestModel(t, newFakeProvider())
+	m.history = []historyEntry{
+		{kind: histUser, text: "first"},
+		{kind: histResponse, text: "answer"},
+		{kind: histUser, text: "second"},
+	}
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("test setup: empty enter should not produce a command")
+	}
+	m2.input.SetValue("/rewind")
+	m3, cmd := runUpdate(t, m2, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("/rewind should open picker synchronously")
+	}
+	if m3.mode != modeRollback {
+		t.Fatalf("mode=%v want modeRollback", m3.mode)
+	}
+	if m3.rollbackIdx != 1 {
+		t.Errorf("rollbackIdx=%d want latest user prompt index 1", m3.rollbackIdx)
+	}
+}
+
+func TestRollbackEnterRestoresPromptAndMaterializesRetainedTurns(t *testing.T) {
+	fp := newFakeProvider()
+	var gotWorkspace string
+	var gotTurns []NeutralTurn
+	fp.materializeFn = func(workspace string, turns []NeutralTurn) (string, string, error) {
+		gotWorkspace = workspace
+		gotTurns = append([]NeutralTurn(nil), turns...)
+		return "rewound-native", workspace, nil
+	}
+	m := newTestModel(t, fp)
+	m.sessionID = "old-session"
+	m.virtualSessionID = "old-vs"
+	m.history = []historyEntry{
+		{kind: histUser, text: "first"},
+		{kind: histResponse, text: "answer"},
+		{kind: histUser, text: "second"},
+		{kind: histResponse, text: "bad answer"},
+	}
+	m.mode = modeRollback
+	m.rollbackIdx = 1
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("rollback with retained turns should materialize a provider session")
+	}
+	if m2.mode != modeInput {
+		t.Errorf("mode=%v want modeInput", m2.mode)
+	}
+	if got := m2.input.Value(); got != "second" {
+		t.Errorf("input=%q want restored prompt", got)
+	}
+	if len(m2.history) != 2 {
+		t.Fatalf("history len=%d want retained first exchange", len(m2.history))
+	}
+	if m2.sessionID != "" {
+		t.Errorf("sessionID should be cleared until materialize returns, got %q", m2.sessionID)
+	}
+	if m2.virtualSessionID == "" || m2.virtualSessionID == "old-vs" {
+		t.Errorf("virtualSessionID should be replaced for the fork, got %q", m2.virtualSessionID)
+	}
+	if !m2.busy || m2.status != "rewinding…" {
+		t.Errorf("busy/status=(%v,%q), want rewinding state", m2.busy, m2.status)
+	}
+	if !m2.rollbackMaterializing {
+		t.Error("rollbackMaterializing should block sends until materialize returns")
+	}
+
+	msgs := drainBatch(t, cmd)
+	if gotWorkspace == "" {
+		t.Fatal("Materialize was not called")
+	}
+	wantTurns := []NeutralTurn{{Role: "user", Text: "first"}, {Role: "assistant", Text: "answer"}}
+	if !reflect.DeepEqual(gotTurns, wantTurns) {
+		t.Fatalf("turns=%+v want %+v", gotTurns, wantTurns)
+	}
+	var materialized virtualSessionMaterializedMsg
+	for _, msg := range msgs {
+		if m, ok := msg.(virtualSessionMaterializedMsg); ok {
+			materialized = m
+			break
+		}
+	}
+	if materialized.nativeSessionID == "" {
+		t.Fatalf("batch did not return materialize message: %#v", msgs)
+	}
+	m3, _ := runUpdate(t, m2, materialized)
+	if m3.sessionID != "rewound-native" {
+		t.Errorf("sessionID=%q want rewound-native", m3.sessionID)
+	}
+	if m3.busy || m3.status != "" {
+		t.Errorf("busy/status=(%v,%q), want idle after materialize", m3.busy, m3.status)
+	}
+	if m3.rollbackMaterializing {
+		t.Error("rollbackMaterializing should clear after materialize returns")
+	}
+}
+
+func TestRollbackMaterializingBlocksSubmitWithoutAppendingUser(t *testing.T) {
+	fp := newFakeProvider()
+	m := newTestModel(t, fp)
+	m.rollbackMaterializing = true
+	m.busy = true
+	m.status = "rewinding…"
+	m.input.SetValue("restored prompt")
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("submit during rollback materialize should not start provider")
+	}
+	if len(m2.history) != 0 {
+		t.Fatalf("history should not append user while materializing, got %+v", m2.history)
+	}
+	if len(fp.startArgs) != 0 || len(fp.sentTexts) != 0 {
+		t.Fatalf("provider should not be touched, starts=%d sends=%v", len(fp.startArgs), fp.sentTexts)
+	}
+	if got := m2.input.Value(); got != "restored prompt" {
+		t.Errorf("input=%q should stay editable/restored", got)
+	}
+}
+
+func TestRollbackToFirstPromptStartsFreshSession(t *testing.T) {
+	m := newTestModel(t, newFakeProvider())
+	m.sessionID = "old-session"
+	m.virtualSessionID = "old-vs"
+	m.history = []historyEntry{
+		{kind: histUser, text: "first"},
+		{kind: histResponse, text: "answer"},
+	}
+	m.mode = modeRollback
+	m.rollbackIdx = 0
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("rollback to first prompt should not materialize empty context")
+	}
+	if len(m2.history) != 0 {
+		t.Fatalf("history=%+v want empty retained context", m2.history)
+	}
+	if got := m2.input.Value(); got != "first" {
+		t.Errorf("input=%q want first prompt", got)
+	}
+	if m2.sessionID != "" || m2.virtualSessionID != "" {
+		t.Errorf("session IDs should be cleared, got native=%q virtual=%q", m2.sessionID, m2.virtualSessionID)
 	}
 }
 
