@@ -811,11 +811,6 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-			if m.input.Value() == "" {
-				m.chat.ScrollDown(1)
-				m.lastContentFP = ""
-				return m, nil
-			}
 			if m.historyIdx >= 0 {
 				m.historyNext()
 				return m, nil
