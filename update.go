@@ -791,11 +791,6 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if m.input.Value() == "" && m.popQueuedTurnForEdit() {
 				return m, nil
 			}
-			if m.busy && m.input.Value() == "" {
-				m.chat.ScrollUp(1)
-				m.lastContentFP = ""
-				return m, nil
-			}
 			if m.historyIdx >= 0 || m.input.Line() == 0 {
 				if m.historyPrev() {
 					return m, nil
