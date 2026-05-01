@@ -393,11 +393,11 @@ func TestApplySelectionHighlight_AddsAnsiOnSelectedCells(t *testing.T) {
 	}
 }
 
-func TestView_EnablesCellMouseModeForWheelAndScrollbar(t *testing.T) {
+func TestView_DisablesMouseModeForTerminalSelectionPassthrough(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	view := m.View()
-	if view.MouseMode != tea.MouseModeCellMotion {
-		t.Fatalf("MouseMode=%v, want MouseModeCellMotion so wheel and scrollbar events reach ask", view.MouseMode)
+	if view.MouseMode != tea.MouseModeNone {
+		t.Fatalf("MouseMode=%v, want MouseModeNone so terminal text selection receives left-drag", view.MouseMode)
 	}
 }
 

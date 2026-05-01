@@ -641,15 +641,16 @@ status-string renames that would silently disable the error styling.
 
 ---
 
-## 16. Mouse wheel and scrollbar input
+## 16. Native terminal selection passthrough
 
-**Purpose.** Keep mouse wheel and right-column scrollbar interaction working in
-the Bubble Tea viewport.
+**Purpose.** Match Codex-style terminal selection behavior: ask does not
+request Bubble Tea mouse reporting, so left-click/drag selection is handled by
+the terminal emulator instead of ask.
 
 **Behavior details worth preserving.**
-- `View()` sets `MouseModeCellMotion`. Without mouse reporting, terminals in
-  the altscreen can translate wheel input into Up/Down key sequences, which
-  drives prompt history instead of the chat viewport.
+- `View()` sets `MouseModeNone`. Enabling `MouseModeCellMotion` causes the
+  terminal to send ask mouse events and prevents normal left-drag text
+  selection.
 - Left-click in the chat viewport is a no-op in `Update`; it must not start
   ask-owned selection state.
 - Ctrl+C follows the normal cancel/exit/input ladder even if stale selection
@@ -658,7 +659,7 @@ the Bubble Tea viewport.
 **Key files.**
 - `view.go` (`View` mouse mode)
 - `update.go` (`tea.MouseClickMsg` passthrough)
-- `selection_test.go` (`TestView_EnablesCellMouseModeForWheelAndScrollbar`,
+- `selection_test.go` (`TestView_DisablesMouseModeForTerminalSelectionPassthrough`,
   `TestUpdateMouseLeftClick_DoesNotStartSelection`,
   `TestUpdateCtrlC_WithSelectionFallsThroughToCancel`)
 
@@ -667,8 +668,8 @@ the Bubble Tea viewport.
 - `go test ./...`
 
 **Rebase risk.** Medium. Any future mouse-wheel, scrollbar, or selection
-feature that disables Bubble Tea mouse reporting will make wheel input behave
-like Up/Down prompt-history keys again.
+feature that re-enables Bubble Tea mouse reporting will break terminal-native
+left-drag selection again.
 
 ---
 

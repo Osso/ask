@@ -538,7 +538,7 @@ func (m model) View() tea.View {
 	}
 	var v tea.View
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	v.MouseMode = tea.MouseModeNone
 	v.BackgroundColor = themeBackground
 	v.ForegroundColor = themeForeground
 
