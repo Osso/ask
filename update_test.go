@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1076,6 +1077,53 @@ func TestUpdate_UpPopsLatestQueuedTurnForEditing(t *testing.T) {
 	}
 	if len(m5.queuedTurns) != 2 || m5.queuedTurns[1].text != "second edited" {
 		t.Fatalf("queuedTurns=%+v want edited turn requeued last", m5.queuedTurns)
+	}
+}
+
+func TestUpdate_MouseWheelScrollsChatWhileBusy(t *testing.T) {
+	fp := newFakeProvider()
+	m := newTestModel(t, fp)
+	m.busy = true
+	m.inputHistory = []string{"old prompt"}
+	for i := 0; i < 50; i++ {
+		m.appendHistory("entry " + strconv.Itoa(i))
+	}
+	(&m).layout()
+	m.chat.GotoBottom()
+	bottom := m.chat.YOffset()
+
+	m2, cmd := runUpdate(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if cmd != nil {
+		t.Fatal("mouse-wheel scrolling should not emit a command")
+	}
+	if got := m2.input.Value(); got != "" {
+		t.Fatalf("input=%q want empty; wheel scroll should not recall prompt history", got)
+	}
+	if m2.chat.YOffset() >= bottom {
+		t.Fatalf("chat yOffset=%d want less than starting bottom %d", m2.chat.YOffset(), bottom)
+	}
+}
+
+func TestUpdate_MouseWheelScrollsChatWhileIdle(t *testing.T) {
+	fp := newFakeProvider()
+	m := newTestModel(t, fp)
+	m.inputHistory = []string{"old prompt"}
+	for i := 0; i < 50; i++ {
+		m.appendHistory("entry " + strconv.Itoa(i))
+	}
+	(&m).layout()
+	m.chat.GotoBottom()
+	bottom := m.chat.YOffset()
+
+	m2, cmd := runUpdate(t, m, tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	if cmd != nil {
+		t.Fatal("mouse-wheel scrolling should not emit a command")
+	}
+	if got := m2.input.Value(); got != "" {
+		t.Fatalf("input=%q want empty; wheel scroll should not recall prompt history", got)
+	}
+	if m2.chat.YOffset() >= bottom {
+		t.Fatalf("chat yOffset=%d want less than starting bottom %d", m2.chat.YOffset(), bottom)
 	}
 }
 
