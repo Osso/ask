@@ -1034,13 +1034,18 @@ func TestSendToProvider_QueuesWhileProcStarting(t *testing.T) {
 	}
 }
 
-func TestUpdate_UpPopsLatestQueuedTurnForEditing(t *testing.T) {
+func TestUpdate_UpScrollsChatWithQueuedTurns(t *testing.T) {
 	fp := newFakeProvider()
 	m := newTestModel(t, fp)
 	m.procStarting = true
 	m.procStartSeq = 7
 	m.busy = true
 	m.status = "starting Fake..."
+	for i := 0; i < 50; i++ {
+		m.appendHistory("entry " + strconv.Itoa(i))
+	}
+	(&m).layout()
+	m.chat.GotoBottom()
 
 	m.input.SetValue("first")
 	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
@@ -1052,31 +1057,21 @@ func TestUpdate_UpPopsLatestQueuedTurnForEditing(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("second queued turn should not start another command")
 	}
+	m3.chat.GotoBottom()
+	bottom := m3.chat.YOffset()
 
 	m4, cmd := runUpdate(t, m3, tea.KeyPressMsg{Code: tea.KeyUp})
 	if cmd != nil {
-		t.Fatal("editing a queued turn should not emit a command")
+		t.Fatal("scrolling chat should not emit a command")
 	}
-	if got := m4.input.Value(); got != "second" {
-		t.Fatalf("input=%q want latest queued turn", got)
+	if got := m4.input.Value(); got != "" {
+		t.Fatalf("input=%q want empty; Up should scroll instead of editing queued turns", got)
 	}
-	if len(m4.queuedTurns) != 1 || m4.queuedTurns[0].text != "first" {
-		t.Fatalf("queuedTurns=%+v want only first remaining", m4.queuedTurns)
+	if len(m4.queuedTurns) != 2 || m4.queuedTurns[0].text != "first" || m4.queuedTurns[1].text != "second" {
+		t.Fatalf("queuedTurns=%+v want both queued turns preserved", m4.queuedTurns)
 	}
-	if len(m4.inputHistory) != 1 || m4.inputHistory[0] != "first" {
-		t.Fatalf("inputHistory=%+v want only first remaining", m4.inputHistory)
-	}
-	if len(m4.history) != 1 || m4.history[0].text != userBarText("first", 0) {
-		t.Fatalf("history=%+v want only first user entry remaining", m4.history)
-	}
-
-	m4.input.SetValue("second edited")
-	m5, cmd := runUpdate(t, m4, tea.KeyPressMsg{Code: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatal("edited queued turn should not start another command")
-	}
-	if len(m5.queuedTurns) != 2 || m5.queuedTurns[1].text != "second edited" {
-		t.Fatalf("queuedTurns=%+v want edited turn requeued last", m5.queuedTurns)
+	if m4.chat.YOffset() >= bottom {
+		t.Fatalf("chat yOffset=%d want less than starting bottom %d", m4.chat.YOffset(), bottom)
 	}
 }
 
@@ -1098,6 +1093,29 @@ func TestUpdate_UpScrollsChatWhileBusyWhenNoQueuedTurn(t *testing.T) {
 	}
 	if got := m2.input.Value(); got != "" {
 		t.Fatalf("input=%q want empty; Up should not recall prompt history while busy", got)
+	}
+	if m2.chat.YOffset() >= bottom {
+		t.Fatalf("chat yOffset=%d want less than starting bottom %d", m2.chat.YOffset(), bottom)
+	}
+}
+
+func TestUpdate_UpScrollsChatWhileIdle(t *testing.T) {
+	fp := newFakeProvider()
+	m := newTestModel(t, fp)
+	m.inputHistory = []string{"old prompt"}
+	for i := 0; i < 50; i++ {
+		m.appendHistory("entry " + strconv.Itoa(i))
+	}
+	(&m).layout()
+	m.chat.GotoBottom()
+	bottom := m.chat.YOffset()
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyUp})
+	if cmd != nil {
+		t.Fatal("scrolling chat should not emit a command")
+	}
+	if got := m2.input.Value(); got != "" {
+		t.Fatalf("input=%q want empty; Up should not recall prompt history while idle", got)
 	}
 	if m2.chat.YOffset() >= bottom {
 		t.Fatalf("chat yOffset=%d want less than starting bottom %d", m2.chat.YOffset(), bottom)
