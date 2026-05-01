@@ -1122,6 +1122,95 @@ func TestUpdate_UpScrollsChatWhileIdle(t *testing.T) {
 	}
 }
 
+func TestUpdate_DownScrollsChatWithQueuedTurns(t *testing.T) {
+	fp := newFakeProvider()
+	m := newTestModel(t, fp)
+	m.procStarting = true
+	m.procStartSeq = 7
+	m.busy = true
+	m.status = "starting Fake..."
+	for i := 0; i < 50; i++ {
+		m.appendHistory("entry " + strconv.Itoa(i))
+	}
+	(&m).layout()
+	m.chat.GotoTop()
+	top := m.chat.YOffset()
+
+	m.input.SetValue("first")
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("first queued turn should not start another command")
+	}
+	m2.input.SetValue("second")
+	m3, cmd := runUpdate(t, m2, tea.KeyPressMsg{Code: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("second queued turn should not start another command")
+	}
+	m3.chat.GotoTop()
+	top = m3.chat.YOffset()
+
+	m4, cmd := runUpdate(t, m3, tea.KeyPressMsg{Code: tea.KeyDown})
+	if cmd != nil {
+		t.Fatal("scrolling chat should not emit a command")
+	}
+	if got := m4.input.Value(); got != "" {
+		t.Fatalf("input=%q want empty; Down should scroll instead of editing queued turns", got)
+	}
+	if len(m4.queuedTurns) != 2 || m4.queuedTurns[0].text != "first" || m4.queuedTurns[1].text != "second" {
+		t.Fatalf("queuedTurns=%+v want both queued turns preserved", m4.queuedTurns)
+	}
+	if m4.chat.YOffset() <= top {
+		t.Fatalf("chat yOffset=%d want greater than starting top %d", m4.chat.YOffset(), top)
+	}
+}
+
+func TestUpdate_DownScrollsChatWhileBusyWhenNoQueuedTurn(t *testing.T) {
+	fp := newFakeProvider()
+	m := newTestModel(t, fp)
+	m.busy = true
+	m.inputHistory = []string{"old prompt"}
+	for i := 0; i < 50; i++ {
+		m.appendHistory("entry " + strconv.Itoa(i))
+	}
+	(&m).layout()
+	m.chat.GotoTop()
+	top := m.chat.YOffset()
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if cmd != nil {
+		t.Fatal("scrolling chat should not emit a command")
+	}
+	if got := m2.input.Value(); got != "" {
+		t.Fatalf("input=%q want empty; Down should not recall prompt history while busy", got)
+	}
+	if m2.chat.YOffset() <= top {
+		t.Fatalf("chat yOffset=%d want greater than starting top %d", m2.chat.YOffset(), top)
+	}
+}
+
+func TestUpdate_DownScrollsChatWhileIdle(t *testing.T) {
+	fp := newFakeProvider()
+	m := newTestModel(t, fp)
+	m.inputHistory = []string{"old prompt"}
+	for i := 0; i < 50; i++ {
+		m.appendHistory("entry " + strconv.Itoa(i))
+	}
+	(&m).layout()
+	m.chat.GotoTop()
+	top := m.chat.YOffset()
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: tea.KeyDown})
+	if cmd != nil {
+		t.Fatal("scrolling chat should not emit a command")
+	}
+	if got := m2.input.Value(); got != "" {
+		t.Fatalf("input=%q want empty; Down should not recall prompt history while idle", got)
+	}
+	if m2.chat.YOffset() <= top {
+		t.Fatalf("chat yOffset=%d want greater than starting top %d", m2.chat.YOffset(), top)
+	}
+}
+
 func TestProviderStartDone_SendsQueuedTurns(t *testing.T) {
 	fp := newFakeProvider()
 	m := newTestModel(t, fp)
