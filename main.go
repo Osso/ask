@@ -487,10 +487,21 @@ func main() {
 	a.syncTermCwd()
 	p := tea.NewProgram(a, tea.WithFPS(120))
 	setTeaProgram(p)
+	restoreMouseAlternateScroll := func() {}
+	if err := setMouseAlternateScroll(false); err != nil {
+		debugLog("disable mouse alternate scroll: %v", err)
+	} else {
+		restoreMouseAlternateScroll = func() {
+			if err := setMouseAlternateScroll(true); err != nil {
+				debugLog("restore mouse alternate scroll: %v", err)
+			}
+		}
+	}
 	if simulateApproval {
 		go injectSimulatedApproval(p, first.id, simulateApprovalTool)
 	}
 	final, err := p.Run()
+	restoreMouseAlternateScroll()
 	if fa, ok := final.(app); ok {
 		fa.shutdown()
 	}

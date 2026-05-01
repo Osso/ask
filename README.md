@@ -42,7 +42,7 @@ into `$SHELL`, and fifteen themes re-paint the whole UI live.
   - In Kitty-compatible terminals (Kitty, Ghostty) images render as inline thumbnails using the Kitty graphics protocol with Unicode placeholders
   - In any other terminal they fall back to a text chip
   - Multiple attachments pasted in a row show side-by-side with a bordered preview
-- **Draggable scrollbar** in the right column (mouse or `PgUp`/`PgDn`); the viewport sticks to the bottom only while you are at the bottom, so scrolling up during a stream no longer yanks you back
+- **Scrollbar** in the right column with `PgUp`/`PgDn` navigation; the viewport sticks to the bottom only while you are at the bottom, so scrolling up during a stream no longer yanks you back
 - **Built-in MCP server** exposing two tools:
   - `ask_user_question` — tabbed modal with three question kinds:
     - `pick_one` — single select radio list
@@ -291,8 +291,6 @@ render as raw text in history. Drop to a separate shell for those.
 | `Ctrl+N`               | Open a new tab (inherits the active tab's cwd)     |
 | `Ctrl+←` / `Ctrl+→`    | Cycle to the previous / next tab (wraps)           |
 | `PgUp` / `PgDn`        | Scroll the viewport half a page                    |
-| Mouse wheel            | Scroll the viewport                                |
-| Mouse click on `│`     | Jump to that position on the scrollbar             |
 | `↑` / `↓`              | Navigate lists (session picker, slash menu, modal); at the first line of an empty/unmodified input they walk prior sent messages. In shell mode they walk the shell-only history. |
 | `Tab`                  | Auto-complete a path or slash command              |
 | `!` (empty prompt)     | Enter [shell mode](#shell-mode)                    |

@@ -645,31 +645,40 @@ status-string renames that would silently disable the error styling.
 
 **Purpose.** Match Codex-style terminal selection behavior: ask does not
 request Bubble Tea mouse reporting, so left-click/drag selection is handled by
-the terminal emulator instead of ask.
+the terminal emulator instead of ask. While ask is running, it also disables
+xterm/Ghostty mouse alternate-scroll mode (`CSI ? 1007 l`) so wheel input in
+the altscreen is not translated into Up/Down prompt-history keys.
 
 **Behavior details worth preserving.**
 - `View()` sets `MouseModeNone`. Enabling `MouseModeCellMotion` causes the
   terminal to send ask mouse events and prevents normal left-drag text
   selection.
+- `main()` disables mouse alternate-scroll mode before starting Bubble Tea and
+  restores it on exit. This targets terminals that support DEC private mode
+  1007, including Ghostty's `mouse_alternate_scroll` mode.
 - Left-click in the chat viewport is a no-op in `Update`; it must not start
   ask-owned selection state.
 - Ctrl+C follows the normal cancel/exit/input ladder even if stale selection
   state exists.
 
 **Key files.**
+- `main.go` (`setMouseAlternateScroll(false)` startup/restore)
+- `terminal_mode.go` (DEC mode 1007 writer)
 - `view.go` (`View` mouse mode)
 - `update.go` (`tea.MouseClickMsg` passthrough)
+- `terminal_mode_test.go` (`TestWriteMouseAlternateScrollMode`)
 - `selection_test.go` (`TestView_DisablesMouseModeForTerminalSelectionPassthrough`,
   `TestUpdateMouseLeftClick_DoesNotStartSelection`,
   `TestUpdateCtrlC_WithSelectionFallsThroughToCancel`)
 
 **Tests to re-run after rebase.**
-- `go test ./... -run 'MouseMode|MouseLeftClick|UpdateCtrlC'`
+- `go test ./... -run 'MouseMode|MouseLeftClick|UpdateCtrlC|MouseAlternateScroll'`
 - `go test ./...`
 
 **Rebase risk.** Medium. Any future mouse-wheel, scrollbar, or selection
-feature that re-enables Bubble Tea mouse reporting will break terminal-native
-left-drag selection again.
+feature that re-enables Bubble Tea mouse reporting, or drops the DEC 1007
+startup/restore, will break terminal-native left-drag selection or make wheel
+input recall prompt history again.
 
 ---
 
