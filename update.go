@@ -788,6 +788,9 @@ func (m model) updateInput(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
+			if m.input.Value() == "" && m.popQueuedTurnForEdit() {
+				return m, nil
+			}
 			if m.historyIdx >= 0 || m.input.Line() == 0 {
 				if m.historyPrev() {
 					return m, nil
@@ -1519,6 +1522,27 @@ func (m *model) recordInputHistory(val string) {
 func (m *model) resetHistoryNav() {
 	m.historyIdx = -1
 	m.historyDraft = ""
+}
+
+func (m *model) popQueuedTurnForEdit() bool {
+	if len(m.queuedTurns) == 0 {
+		return false
+	}
+	last := len(m.queuedTurns) - 1
+	turn := m.queuedTurns[last]
+	m.queuedTurns = m.queuedTurns[:last]
+	m.pending = append([]pendingAttachment(nil), turn.attachments...)
+	if n := len(m.inputHistory); n > 0 && m.inputHistory[n-1] == turn.text {
+		m.inputHistory = m.inputHistory[:n-1]
+	}
+	if n := len(m.history); n > 0 && m.history[n-1].kind == histUser &&
+		m.history[n-1].text == userBarText(turn.text, len(turn.attachments)) {
+		m.history = m.history[:n-1]
+	}
+	m.resetHistoryNav()
+	m.input.SetValue(turn.text)
+	m.input.CursorEnd()
+	return true
 }
 
 func (m *model) historyPrev() bool {
