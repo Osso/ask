@@ -451,12 +451,15 @@ func TestUpdateMouseRelease_FinalizesSelection(t *testing.T) {
 	m.selDragging = true
 	m.selAnchor = cellPos{row: 0, col: 0}
 	m.selFocus = cellPos{row: 0, col: 5}
-	m2, _ := runUpdate(t, m, tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
+	m2, cmd := runUpdate(t, m, tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
 	if m2.selDragging {
 		t.Errorf("release must clear selDragging")
 	}
 	if !m2.selActive {
 		t.Errorf("non-degenerate release should activate selection")
+	}
+	if cmd != nil {
+		t.Fatal("release should only finalize selection, not copy")
 	}
 }
 
@@ -518,6 +521,25 @@ func TestUpdateMouseRightClick_WithSelectionCopiesAndClears(t *testing.T) {
 	}
 	if !strings.Contains(tmsg.text, "copied") {
 		t.Errorf("toast text=%q should announce success", tmsg.text)
+	}
+}
+
+func TestUpdateCtrlC_WithSelectionFallsThroughToCancel(t *testing.T) {
+	m := newTestModel(t, newFakeProvider())
+	m.busy = true
+	m.selActive = true
+	m.selAnchor = cellPos{row: 0, col: 0}
+	m.selFocus = cellPos{row: 0, col: 10}
+
+	m2, cmd := runUpdate(t, m, tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+	if cmd != nil {
+		t.Fatal("Ctrl+C cancel path should not return a copy cmd")
+	}
+	if !m2.cancelTurnConfirming {
+		t.Fatal("Ctrl+C with selection must still arm cancel-turn confirm while busy")
+	}
+	if !m2.selActive {
+		t.Fatal("Ctrl+C passthrough must leave the selection intact")
 	}
 }
 

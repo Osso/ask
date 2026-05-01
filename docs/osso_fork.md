@@ -12,11 +12,30 @@ and patches that have intentionally been removed from the stack.
 Current patch stack:
 
 ```text
-95bb36a update: add conversation rewind
-734f5d5 main: add CLI option validation, reject unknown flags/subcommands
-bd2ca81 Add --simulate-approval flag to exercise the approval modal at startup
-ae42218 selection: copy to clipboard on mouse release
-f0a6d4d input: copy selection on Ctrl+C when one is active
+e0751c1 update: add conversation rewind
+ed1b289 update: allow bracketed paste during a turn
+e9445a3 themes: drop muted color from toolResultStyle
+72ed2b4 codex: summarize commandActions in live status line
+fc258ff tabs: layer ctrl+d exit
+65c117e tabs: rebind ctrl+n and drop old ctrl+d
+097231a tool_output: summarize shell-wrapper commands in short Bash render
+385d9c0 proc: resolve cwd symlinks in prepareProviderSessionAt
+e4c3342 worktree: resolve cwd symlinks before lock lookup in pruneWorktrees
+48a36d9 tabs: rebind ctrl+n and layer ctrl+d exit
+95152ac tabs: rebind tab-switch to ctrl+shift+pgup/pgdown so ctrl+left/right reaches textarea
+5c4a4bb tabs: emit OSC 7 so terminal new-tabs inherit the active worktree cwd
+2488a3a main: add -w/--worktree launch override for worktree mode
+da0e46d tabs: arm quitting flag in app.quit so Ctrl+D prints the resume code
+87f6c68 mcp: send EvalSymlinks-resolved cwd to claude-bash-hook-approval
+1b3b314 main: bind ctrl+left/right and ctrl+backspace/delete for textarea word motion
+53934ce session: try EvalSymlinks-resolved cwd when locating Claude session dirs
+8c794fa main: ask resume restores VirtualSession.LastProvider
+d4c8bda main: add --provider and --model launch overrides
+7f57b81 approval: add feedback row + bash-hook persist-rule wiring
+4eac425 claude.go: route permission prompts back to embedded ask bridge
+5f355c8 mcp: shell out to claude-bash-hook-approval decide before firing modal
+0e37880 main: add CLI option validation, reject unknown flags/subcommands
+74f9555 Add --simulate-approval flag to exercise the approval modal at startup
 3419906 Show Codex hook output
 05e132f Support run-plan for Claude provider
 3c92873 Preserve Claude stop hook in ask
@@ -321,8 +340,10 @@ commands it needs locally. `/run-plan` works for both Codex and Claude;
   does not start a provider turn.
 - If a provider process is already running, `handleRunPlan` calls
   `m.killProc()` before `sendToProvider` so the new subprocess inherits the
-  freshly-set `PLAN_FILE` env var. Without this, the env update reaches the
-  parent only and the still-running child keeps the old value.
+  freshly-set `PLAN_FILE` env var. For Codex, ask restarts the provider process
+  before dispatch so the new child inherits the updated env. Without this, the
+  env update reaches the parent only and the still-running child keeps the old
+  value.
 - `/compact` appears in Codex's base slash-command list.
 - `/compact` requires an active Codex app-server thread and sends
   `thread/compact/start` with the current `threadId`.
@@ -341,7 +362,7 @@ commands it needs locally. `/run-plan` works for both Codex and Claude;
 **Tests to re-run after rebase.**
 - `go test ./...`
 - Focused:
-  `go test ./... -run 'ClaudeProvider_Metadata|CodexBaseSlashCommandsIncludes|CodexFindNextPlanItem|CodexRunPlanPrompt|HandleCommand_CodexRunPlan|HandleCommand_ClaudeRunPlan|HandleCommand_CodexCompact'`
+  `go test ./... -run 'ClaudeProvider_Metadata|CodexBaseSlashCommandsIncludes|CodexFindNextPlanItem|CodexRunPlanPrompt|HandleCommand_CodexRunPlan|HandleCommand_CodexRunPlanRestartsExistingProviderForPlanEnv|HandleCommand_ClaudeRunPlan|HandleCommand_CodexCompact'`
 
 **Rebase risk.** Medium. If upstream Codex changes `/run-plan` wording,
 `PLAN_FILE` semantics, `/compact` dispatch, or app-server grows a built-in
@@ -619,56 +640,7 @@ status-string renames that would silently disable the error styling.
 
 ---
 
-## 16. Selection clipboard ergonomics
-
-**Purpose.** Make ask's mouse selection feel like a normal terminal selection
-even though ask owns the mouse capture (and therefore terminal-emulator copy
-bindings cannot see the selection).
-
-**Behavior details worth preserving.**
-- Mouse-release with a non-degenerate selection writes the selected text to
-  the system clipboard immediately via `copyTextCmd`. No keystroke required.
-  Matches the copy-on-select UX users already get from ghostty/kitty's own
-  `copy-on-select` option.
-- The selection highlight is **kept visible** after release (`selActive=true`,
-  no `clearSelection`) so the user sees what was just copied. Click-drag
-  again or click-no-drag to clear.
-- Ctrl+C with an active selection routes to `copySelectionAndClear` (clears
-  the highlight on copy). This is the explicit copy-and-clear shortcut and
-  serves as a backup path if the release-time copy was somehow missed.
-- Ctrl+C also resets `exitArmed` on the copy path so a stale "press ctrl+c
-  again to exit" arm from before the selection does not close the tab on the
-  next press.
-- Ctrl+C with no selection falls through to the existing cancel-turn /
-  arm-exit / clear-input ladder unchanged.
-- Note: terminal emulators may consume Ctrl+C themselves (e.g. ghostty's
-  `ctrl+c=copy_to_clipboard` binding can swallow the keystroke even with a
-  `performable:` prefix when ask owns the mouse). Copy-on-release is the
-  load-bearing path; the Ctrl+C handler is best-effort and only fires when
-  the keystroke actually reaches ask.
-
-**Key files.**
-- `update.go` (`tea.MouseReleaseMsg` handler, `updateInput` Ctrl+C branch)
-- `selection.go` (`copySelectionAndClear`, `copyTextCmd`)
-- `selection_test.go` (`TestUpdateMouseRelease_FinalizesSelectionAndCopies`,
-  `TestUpdateCtrlC_WithSelectionCopiesAndClears`,
-  `TestUpdateCtrlC_NoSelectionFallsThroughToCancel`,
-  `TestUpdateCtrlC_NoSelectionEmptyInputArmsExit`)
-
-**Tests to re-run after rebase.**
-- `go test ./... -run 'MouseRelease|UpdateCtrlC|CopySelection|RightClick'`
-- `go test ./...`
-
-**Rebase risk.** Medium. Upstream may evolve the selection or
-mouse-handling layer (ScrollbarDragging, viewport mouse capture, modal
-dismissal), so re-check the MouseReleaseMsg branch carefully — both the
-copy trigger and the deliberate omission of `clearSelection` need to
-survive. If upstream introduces its own copy-on-select toggle, prefer
-delegating to that and dropping this patch.
-
----
-
-## 17. Simulated approval flag
+## 16. Simulated approval flag
 
 **Purpose.** Provide a developer-facing CLI flag that fires a synthetic
 `approvalRequestMsg` directly into the running tea program at startup so the
