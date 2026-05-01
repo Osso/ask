@@ -565,29 +565,8 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 		if m.mode != modeInput {
 			return m, nil
 		}
-		vpH := m.chat.Height()
-		inViewport := msg.Y >= 0 && msg.Y < vpH
-		onScrollbar := inViewport && msg.X == m.width-1 && m.chat.TotalLineCount() > vpH
-		switch msg.Button {
-		case tea.MouseLeft:
-			if onScrollbar {
-				m.scrollbarDragging = true
-				m.scrollViewportTo(msg.Y)
-				return m, nil
-			}
-			if inViewport && msg.X >= 0 && msg.X < m.width-1 {
-				m.clearSelection()
-				cell := m.screenToContentCell(msg.X, msg.Y)
-				m.selAnchor = cell
-				m.selFocus = cell
-				m.selDragging = true
-				m.lastContentFP = ""
-				return m, nil
-			}
-		case tea.MouseRight:
-			if m.selActive {
-				return m.copySelectionAndClear()
-			}
+		if msg.Button == tea.MouseRight && m.selActive {
+			return m.copySelectionAndClear()
 		}
 		return m, nil
 
@@ -596,27 +575,11 @@ func (m model) Update(msg tea.Msg) (newModel tea.Model, cmd tea.Cmd) {
 			m.scrollViewportTo(msg.Y)
 			return m, nil
 		}
-		if m.selDragging {
-			y := max(0, min(m.chat.Height()-1, msg.Y))
-			x := max(0, min(m.width-2, msg.X))
-			m.selFocus = m.screenToContentCell(x, y)
-			m.lastContentFP = ""
-			return m, nil
-		}
 		return m, nil
 
 	case tea.MouseReleaseMsg:
 		if m.scrollbarDragging {
 			m.scrollbarDragging = false
-		}
-		if m.selDragging {
-			m.selDragging = false
-			if m.selAnchor == m.selFocus {
-				m.clearSelection()
-			} else {
-				m.selActive = true
-			}
-			m.lastContentFP = ""
 		}
 		return m, nil
 

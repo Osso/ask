@@ -53,13 +53,13 @@ func TestSelectionContains_SingleRow(t *testing.T) {
 		row, col int
 		want     bool
 	}{
-		{3, 4, false},   // before
-		{3, 5, true},    // start (inclusive)
-		{3, 8, true},    // middle
-		{3, 12, true},   // end (inclusive)
-		{3, 13, false},  // after
-		{2, 8, false},   // wrong row
-		{4, 8, false},   // wrong row
+		{3, 4, false},  // before
+		{3, 5, true},   // start (inclusive)
+		{3, 8, true},   // middle
+		{3, 12, true},  // end (inclusive)
+		{3, 13, false}, // after
+		{2, 8, false},  // wrong row
+		{4, 8, false},  // wrong row
 	}
 	for _, c := range cases {
 		if got := m.selectionContains(c.row, c.col); got != c.want {
@@ -102,9 +102,9 @@ func TestEntryRowRanges_TracksHeightsWithSeparator(t *testing.T) {
 	}
 	got := m.entryRowRanges()
 	want := [][2]int{
-		{0, 1},  // 1-row user, then separator at row 1
-		{2, 5},  // 3-row response (rows 2,3,4), separator at row 5
-		{6, 7},  // 1-row prerendered
+		{0, 1}, // 1-row user, then separator at row 1
+		{2, 5}, // 3-row response (rows 2,3,4), separator at row 5
+		{6, 7}, // 1-row prerendered
 	}
 	if len(got) != len(want) {
 		t.Fatalf("len mismatch got=%v want=%v", got, want)
@@ -393,84 +393,24 @@ func TestApplySelectionHighlight_AddsAnsiOnSelectedCells(t *testing.T) {
 	}
 }
 
-func TestUpdateMouseLeftClick_StartsSelection(t *testing.T) {
+func TestView_DisablesMouseModeForTerminalSelectionPassthrough(t *testing.T) {
+	m := newTestModel(t, newFakeProvider())
+	view := m.View()
+	if view.MouseMode != tea.MouseModeNone {
+		t.Fatalf("MouseMode=%v, want MouseModeNone so terminal text selection receives left-drag", view.MouseMode)
+	}
+}
+
+func TestUpdateMouseLeftClick_DoesNotStartSelection(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.chat.SetWidth(80)
 	m.chat.SetHeight(20)
 	m2, _ := runUpdate(t, m, tea.MouseClickMsg{X: 10, Y: 5, Button: tea.MouseLeft})
-	if !m2.selDragging {
-		t.Errorf("left click in viewport should set selDragging")
-	}
-	if m2.selAnchor.col != 10 {
-		t.Errorf("anchor col=%d want 10", m2.selAnchor.col)
-	}
-	if m2.selFocus != m2.selAnchor {
-		t.Errorf("anchor and focus should match on initial click")
-	}
-}
-
-func TestUpdateMouseLeftClick_ScrollbarUnaffected(t *testing.T) {
-	// Acceptance criterion: scrollbar drag must keep working — left
-	// click on the rightmost column with content longer than viewport
-	// height starts scrollbarDragging and never starts a text selection.
-	m := newTestModel(t, newFakeProvider())
-	m.width = 40
-	m.chat.SetWidth(39)
-	m.chat.SetHeight(5)
-	for i := 0; i < 100; i++ {
-		m.appendHistory("line " + strconv.Itoa(i))
-	}
-	(&m).layout()
-	msg := tea.MouseClickMsg{X: m.width - 1, Y: 2, Button: tea.MouseLeft}
-	m2, _ := runUpdate(t, m, msg)
-	if !m2.scrollbarDragging {
-		t.Errorf("scrollbar click should set scrollbarDragging")
-	}
-	if m2.selDragging {
-		t.Errorf("scrollbar click must not start a text selection")
-	}
-}
-
-func TestUpdateMouseMotion_UpdatesSelectionFocus(t *testing.T) {
-	m := newTestModel(t, newFakeProvider())
-	m.width = 80
-	m.chat.SetWidth(80)
-	m.chat.SetHeight(20)
-	m.selDragging = true
-	m.selAnchor = cellPos{row: 1, col: 3}
-	m.selFocus = cellPos{row: 1, col: 3}
-	m2, _ := runUpdate(t, m, tea.MouseMotionMsg{X: 15, Y: 8})
-	if m2.selFocus.col != 15 {
-		t.Errorf("motion col=%d want 15", m2.selFocus.col)
-	}
-}
-
-func TestUpdateMouseRelease_FinalizesSelection(t *testing.T) {
-	m := newTestModel(t, newFakeProvider())
-	m.width = 80
-	m.selDragging = true
-	m.selAnchor = cellPos{row: 0, col: 0}
-	m.selFocus = cellPos{row: 0, col: 5}
-	m2, cmd := runUpdate(t, m, tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
-	if m2.selDragging {
-		t.Errorf("release must clear selDragging")
-	}
-	if !m2.selActive {
-		t.Errorf("non-degenerate release should activate selection")
-	}
-	if cmd != nil {
-		t.Fatal("release should only finalize selection, not copy")
-	}
-}
-
-func TestUpdateMouseRelease_DegenerateSelectionClears(t *testing.T) {
-	m := newTestModel(t, newFakeProvider())
-	m.selDragging = true
-	m.selAnchor = cellPos{row: 0, col: 5}
-	m.selFocus = cellPos{row: 0, col: 5}
-	m2, _ := runUpdate(t, m, tea.MouseReleaseMsg{X: 5, Y: 0, Button: tea.MouseLeft})
 	if m2.selDragging || m2.selActive {
-		t.Errorf("anchor==focus release should clear, not finalize")
+		t.Errorf("left click in viewport should pass through, got selDragging=%v selActive=%v", m2.selDragging, m2.selActive)
+	}
+	if m2.selAnchor != (cellPos{}) || m2.selFocus != (cellPos{}) {
+		t.Errorf("left click should not update selection bounds, anchor=%+v focus=%+v", m2.selAnchor, m2.selFocus)
 	}
 }
 

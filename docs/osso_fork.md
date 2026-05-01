@@ -12,6 +12,7 @@ and patches that have intentionally been removed from the stack.
 Current patch stack:
 
 ```text
+selection: let terminal handle mouse selection
 e0751c1 update: add conversation rewind
 ed1b289 update: allow bracketed paste during a turn
 e9445a3 themes: drop muted color from toolResultStyle
@@ -640,7 +641,39 @@ status-string renames that would silently disable the error styling.
 
 ---
 
-## 16. Simulated approval flag
+## 16. Native terminal selection passthrough
+
+**Purpose.** Match Codex-style terminal selection behavior: ask does not
+request Bubble Tea mouse reporting, so left-click/drag selection is handled by
+the terminal emulator instead of ask.
+
+**Behavior details worth preserving.**
+- `View()` sets `MouseModeNone`. Enabling `MouseModeCellMotion` causes the
+  terminal to send ask mouse events and prevents normal left-drag text
+  selection.
+- Left-click in the chat viewport is a no-op in `Update`; it must not start
+  ask-owned selection state.
+- Ctrl+C follows the normal cancel/exit/input ladder even if stale selection
+  state exists.
+
+**Key files.**
+- `view.go` (`View` mouse mode)
+- `update.go` (`tea.MouseClickMsg` passthrough)
+- `selection_test.go` (`TestView_DisablesMouseModeForTerminalSelectionPassthrough`,
+  `TestUpdateMouseLeftClick_DoesNotStartSelection`,
+  `TestUpdateCtrlC_WithSelectionFallsThroughToCancel`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'MouseMode|MouseLeftClick|UpdateCtrlC'`
+- `go test ./...`
+
+**Rebase risk.** Medium. Any future mouse-wheel, scrollbar, or selection
+feature that re-enables Bubble Tea mouse reporting will break terminal-native
+left-drag selection again.
+
+---
+
+## 17. Simulated approval flag
 
 **Purpose.** Provide a developer-facing CLI flag that fires a synthetic
 `approvalRequestMsg` directly into the running tea program at startup so the
