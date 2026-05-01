@@ -12,7 +12,7 @@ and patches that have intentionally been removed from the stack.
 Current patch stack:
 
 ```text
-selection: let terminal handle mouse selection
+40c2711 selection: let terminal handle mouse selection
 e0751c1 update: add conversation rewind
 ed1b289 update: allow bracketed paste during a turn
 e9445a3 themes: drop muted color from toolResultStyle
