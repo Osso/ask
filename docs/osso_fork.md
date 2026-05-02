@@ -12,6 +12,7 @@ and patches that have intentionally been removed from the stack.
 Current patch stack:
 
 ```text
+<this commit> codex: capture thread id on start
 40c2711 selection: let terminal handle mouse selection
 e0751c1 update: add conversation rewind
 ed1b289 update: allow bracketed paste during a turn
@@ -1272,6 +1273,38 @@ materialization path staying provider-neutral. If upstream adds first-class
 message rewind, prefer preserving the provider-session fork semantics over
 keeping this exact picker implementation. Upstream issue is filed
 (`Cidan/ask#12`); drop this patch if upstream merges an equivalent feature.
+
+---
+
+## 31. Capture Codex thread id on startup
+
+**Purpose.** A freshly-started Codex thread is known immediately after the
+app-server handshake, but ask previously copied the native session id into
+the model only from `turn/completed`. Interrupting the first turn before
+that event could leave `m.sessionID` empty, so the next prompt started a
+fresh Codex thread instead of resuming the interrupted one.
+
+**Behavior details worth preserving.**
+- `handleProviderStartDone` copies the provider-native session id from the
+  started proc before waiting for any turn completion event.
+- The current implementation extracts `codexState.threadID` under its mutex;
+  providers without a startup-known session id return empty and keep the old
+  completion-based path.
+- `providerDoneMsg` still updates `m.sessionID` after completed turns, so the
+  normal completion path and virtual-session recording remain intact.
+
+**Key files.**
+- `proc.go` (`handleProviderStartDone`, `procSessionID`)
+- `update_test.go` (`TestUpdate_ProviderStartDoneCapturesCodexSessionID`)
+
+**Tests to re-run after rebase.**
+- `go test ./... -run 'ProviderStartDoneCapturesCodexSessionID|ProviderDoneMsgUpdatesSessionID|CodexInterrupt'`
+- `go test ./...`
+
+**Rebase risk.** Low. The patch is localized to provider startup state, but
+if upstream introduces a provider-neutral "session id ready" message, prefer
+that over peeking into the Codex proc payload. Upstream issue is filed
+(`Cidan/ask#13`); drop this patch if upstream merges an equivalent fix.
 
 ---
 

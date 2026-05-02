@@ -171,6 +171,27 @@ func TestUpdate_ProviderDoneMsgUpdatesSessionID(t *testing.T) {
 	}
 }
 
+func TestUpdate_ProviderStartDoneCapturesCodexSessionID(t *testing.T) {
+	fp := newFakeProvider()
+	fp.id = "codex"
+	m := newTestModel(t, fp)
+	m.procStarting = true
+	m.procStartSeq = 1
+	proc := &providerProc{payload: &codexState{threadID: "thread-started"}}
+
+	m2, _ := runUpdate(t, m, providerStartDoneMsg{
+		tabID:      m.id,
+		seq:        1,
+		providerID: fp.id,
+		proc:       proc,
+		streamCh:   make(chan tea.Msg, 1),
+	})
+
+	if m2.sessionID != "thread-started" {
+		t.Errorf("sessionID=%q want thread-started", m2.sessionID)
+	}
+}
+
 func TestUpdate_ProviderDoneIsErrorAppendsError(t *testing.T) {
 	m := newTestModel(t, newFakeProvider())
 	m.proc = &providerProc{}

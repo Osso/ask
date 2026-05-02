@@ -282,6 +282,10 @@ func (m model) handleProviderStartDone(msg providerStartDoneMsg) (tea.Model, tea
 	m.proc = msg.proc
 	m.streamCh = msg.streamCh
 	m.worktreeName = msg.worktreeName
+	if sessionID := procSessionID(msg.proc); sessionID != "" {
+		m.sessionID = sessionID
+		m.recordVirtualSession(sessionID)
+	}
 	m.busy = true
 	m.status = "thinking…"
 
@@ -299,6 +303,19 @@ func (m model) handleProviderStartDone(msg providerStartDoneMsg) (tea.Model, tea
 		return m, nextStreamCmd(m.streamCh)
 	}
 	return m, nil
+}
+
+func procSessionID(p *providerProc) string {
+	if p == nil {
+		return ""
+	}
+	state, _ := p.payload.(*codexState)
+	if state == nil {
+		return ""
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.threadID
 }
 
 // cancelTurn asks the provider to cancel cooperatively (turn/interrupt
